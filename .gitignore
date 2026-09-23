@@ -1,0 +1,25 @@
+# Operating System Files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary & Debug Artifacts
+debug_*.png
+tthcm_*.png
+test_*.png
+pdf_pages/
+scratch/
+extract_data.py
+test_schedule.js
+test_week4.js
+verify_*.js
+*.tmp
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local Test Profiles
+chrome-test-profile-*
+chrome-pdf-test-*
