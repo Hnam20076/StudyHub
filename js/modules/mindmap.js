@@ -3,7 +3,7 @@
  * Visual recursive tree, draggable nodes, bezier connections, inline editing, zoom/pan, auto-save, and PNG export.
  */
 
-import { getAll, saveItem, deleteItem, getById } from '../db.js';
+import { getAll, saveItem, deleteItem, getById, softDeleteItem, restoreItem } from '../db.js';
 import {
   generateId,
   SUBJECT_COLORS,
@@ -30,7 +30,8 @@ export async function initMindMapModule() {
 }
 
 export async function loadMindmaps() {
-  currentMindmaps = await getAll('mindmaps');
+  const allMindmaps = await getAll('mindmaps');
+  currentMindmaps = allMindmaps.filter(m => !m.deletedAt);
   currentMindmaps.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
   return currentMindmaps;
 }
@@ -179,18 +180,19 @@ function renderMindMapGallery(container) {
       const mm = currentMindmaps.find(m => m.id === id);
       if (!mm) return;
 
-      const confirmed = await confirmDialog({
-        title: 'Xóa sơ đồ tư duy',
-        message: `Bạn có chắc chắn muốn xóa sơ đồ "${mm.title}"? Thao tác này không thể hoàn tác.`,
-        confirmText: 'Xóa vĩnh viễn'
-      });
+      await softDeleteItem('mindmaps', id);
+      await loadMindmaps();
+      renderMindMapView();
 
-      if (confirmed) {
-        await deleteItem('mindmaps', id);
-        await loadMindmaps();
-        renderMindMapView();
-        showToast(`Đã xóa sơ đồ "${mm.title}"`, 'success');
-      }
+      showToast(`Đã chuyển sơ đồ "${mm.title}" vào thùng rác`, 'info', 5000, {
+        label: 'Hoàn tác',
+        onClick: async () => {
+          await restoreItem('mindmaps', id);
+          await loadMindmaps();
+          renderMindMapView();
+          showToast(`Đã khôi phục sơ đồ "${mm.title}" thành công!`, 'success');
+        }
+      });
     });
   });
 }
@@ -827,10 +829,18 @@ export function openCreateMindMapModal(editingItem = null) {
           <input
             type="text"
             id="mm-subject-input"
-            placeholder="VD: Mạng máy tính, Lập trình Web..."
+            list="mm-subjects-datalist"
+            placeholder="VD: Kỹ thuật số, Cơ học vật liệu..."
             value="${escapeHtml(editingItem ? editingItem.subjectName || '' : '')}"
             class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm outline-none focus:border-amber-500 transition"
           />
+          <datalist id="mm-subjects-datalist">
+            <option value="Kỹ thuật số">
+            <option value="Kỹ năng công dân toàn cầu">
+            <option value="Hệ thống và điều khiển">
+            <option value="Cơ học vật liệu">
+            <option value="Tư tưởng Hồ Chí Minh">
+          </datalist>
         </div>
 
         <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -863,8 +873,18 @@ export function openCreateMindMapModal(editingItem = null) {
       return;
     }
 
+    const subjectCodeMap = {
+      'Kỹ thuật số': '71ELEC30083',
+      'Kỹ năng công dân toàn cầu': '71SSK110023',
+      'Hệ thống và điều khiển': '71ELEC30163',
+      'Cơ học vật liệu': '71MECA30023',
+      'Tư tưởng Hồ Chí Minh': '71POLH10042'
+    };
+    const subjectId = subjectCodeMap[subjectName] || (editingItem ? editingItem.subjectId : '') || '';
+
     if (isEditing) {
       editingItem.title = title;
+      editingItem.subjectId = subjectId;
       editingItem.subjectName = subjectName;
       editingItem.updatedAt = new Date().toISOString();
       await saveItem('mindmaps', editingItem);
@@ -872,6 +892,7 @@ export function openCreateMindMapModal(editingItem = null) {
       const newMindmap = {
         id: generateId(),
         title,
+        subjectId,
         subjectName,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

@@ -1,6 +1,8 @@
 /**
  * StudyHub Main Application Entry Point
- * Handles DB init, Theme management, Navigation Routing, and Global Events.
+ * Handles DB init, Theme management, Navigation Routing, PWA Service Worker,
+ * Global Search (Ctrl+K), Soft Delete Trash & Undo, Schedule Notifications,
+ * and 7-day Backup Reminders.
  */
 
 import {
@@ -12,12 +14,16 @@ import {
   getSetting,
   setSetting,
   exportAllData,
-  importData
+  importData,
+  countTrashItems
 } from './db.js';
 import { formatDateVietnamese } from './utils/helpers.js';
 import { renderNavbar, NAV_ITEMS } from './components/navbar.js';
 import { showToast } from './components/toast.js';
 import { confirmDialog } from './components/modal.js';
+import { initGlobalSearch } from './components/search.js';
+import { openTrashModal } from './components/trashModal.js';
+import { startScheduleNotificationTicker } from './modules/notification.js';
 
 // Modules
 import { initScheduleModule, renderSchedule, openScheduleFormModal } from './modules/schedule.js';
@@ -30,6 +36,13 @@ let activeView = 'schedule'; // Start directly with Thời khóa biểu as reque
 
 async function initApp() {
   try {
+    // 0. Expose global app for cross-linking & shortcuts
+    window.studyHubApp = {
+      switchView,
+      updateTrashBadgeCounts,
+      getActiveView: () => activeView
+    };
+
     // 1. Initialize IndexedDB
     await openDB();
 
@@ -54,7 +67,22 @@ async function initApp() {
     // 6. Setup Backup and Restore
     setupBackupRestore();
 
-    // 7. Setup Mobile Quick Add button
+    // 7. Setup Global Search (Ctrl+K Command Palette)
+    initGlobalSearch();
+
+    // 8. Setup Trash Modal triggers & Badge counts
+    setupTrashFeatures();
+
+    // 9. Start Schedule Notification Ticker (60-second ticker)
+    startScheduleNotificationTicker();
+
+    // 10. Check 7-day Backup Reminder
+    checkBackupReminder();
+
+    // 11. Register Service Worker (PWA Offline caching)
+    registerServiceWorker();
+
+    // 12. Setup Mobile Quick Add button
     const mobileAddBtn = document.getElementById('btn-quick-add-mobile');
     if (mobileAddBtn) {
       mobileAddBtn.addEventListener('click', () => {
@@ -70,10 +98,10 @@ async function initApp() {
       });
     }
 
-    // 8. Load initial active view
+    // 13. Load initial active view
     await switchView(activeView);
 
-    console.log('✅ StudyHub đã khởi tạo thành công!');
+    console.log('✅ StudyHub đã khởi tạo thành công với đầy đủ tính năng PWA & Tối ưu!');
   } catch (err) {
     console.error('Lỗi khởi tạo StudyHub:', err);
     showToast('Lỗi tải dữ liệu ứng dụng. Vui lòng tải lại trang.', 'error');
@@ -135,6 +163,9 @@ export async function switchView(viewId) {
   } else if (activeView === 'imageNotes') {
     await initImageNotesModule();
   }
+
+  // Update trash badges whenever views switch
+  updateTrashBadgeCounts();
 
   // Refresh Lucide icons
   if (window.lucide) {
@@ -200,6 +231,71 @@ function applyTheme(theme) {
 }
 
 /**
+ * Trash Features & Badges
+ */
+export async function updateTrashBadgeCounts() {
+  try {
+    const count = await countTrashItems();
+    const topBadge = document.getElementById('trash-badge-count');
+    if (topBadge) {
+      if (count > 0) {
+        topBadge.textContent = count;
+        topBadge.classList.remove('hidden');
+      } else {
+        topBadge.classList.add('hidden');
+      }
+    }
+    const sideCount = document.getElementById('sidebar-trash-count');
+    if (sideCount) {
+      sideCount.textContent = count;
+    }
+  } catch (err) {
+    console.warn('Không thể đếm số lượng thùng rác:', err);
+  }
+}
+
+function setupTrashFeatures() {
+  const handleOpenTrash = () => {
+    openTrashModal(async () => {
+      await updateTrashBadgeCounts();
+      await switchView(activeView);
+    });
+  };
+
+  const btnTrashTop = document.getElementById('btn-open-trash');
+  if (btnTrashTop) btnTrashTop.addEventListener('click', handleOpenTrash);
+
+  const btnTrashSide = document.getElementById('sidebar-btn-trash');
+  if (btnTrashSide) btnTrashSide.addEventListener('click', handleOpenTrash);
+
+  const btnTrashMobile = document.getElementById('btn-open-trash-mobile');
+  if (btnTrashMobile) btnTrashMobile.addEventListener('click', handleOpenTrash);
+
+  updateTrashBadgeCounts();
+}
+
+/**
+ * 7-Day Backup Reminder
+ */
+function checkBackupReminder() {
+  const lastBackupStr = localStorage.getItem('last_backup_timestamp');
+  const now = Date.now();
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+  if (!lastBackupStr || (now - parseInt(lastBackupStr, 10)) > SEVEN_DAYS_MS) {
+    setTimeout(() => {
+      showToast('Đã hơn 7 ngày bạn chưa sao lưu dữ liệu StudyHub. Bấm để tải file backup!', 'info', 10000, {
+        label: 'Sao lưu ngay',
+        onClick: () => {
+          const btnBackup = document.getElementById('btn-backup-data');
+          if (btnBackup) btnBackup.click();
+        }
+      });
+    }, 2500);
+  }
+}
+
+/**
  * Backup & Restore Manager
  */
 function setupBackupRestore() {
@@ -222,6 +318,9 @@ function setupBackupRestore() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+
+        // Record last backup timestamp
+        localStorage.setItem('last_backup_timestamp', Date.now().toString());
 
         showToast('Đã xuất file sao lưu dữ liệu thành công!', 'success');
       } catch (err) {
@@ -265,6 +364,23 @@ function setupBackupRestore() {
         }
       };
       reader.readAsText(file);
+    });
+  }
+}
+
+/**
+ * Service Worker Registration for PWA Offline Caching
+ */
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then(reg => {
+          console.log('✅ ServiceWorker đã sẵn sàng, scope:', reg.scope);
+        })
+        .catch(err => {
+          console.warn('Cảnh báo ServiceWorker registration:', err);
+        });
     });
   }
 }

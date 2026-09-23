@@ -7,6 +7,7 @@ import { getAll } from '../db.js';
 import {
   getCurrentVnDay,
   getDayNameVietnamese,
+  getDayShortVietnamese,
   formatDateVietnamese,
   formatTimeHM,
   timeToMinutes,
@@ -14,6 +15,7 @@ import {
   escapeHtml
 } from '../utils/helpers.js';
 import { openScheduleFormModal } from './schedule.js';
+import { isNotificationEnabled, toggleNotifications } from './notification.js';
 
 let countdownTimer = null;
 
@@ -29,6 +31,14 @@ export async function renderDashboard(onNavigate) {
   const notes = await getAll('notes');
   const mindmaps = await getAll('mindmaps');
   const imageNotes = await getAll('imageNotes');
+
+  const notifActive = await isNotificationEnabled();
+  const lastBackupStr = localStorage.getItem('last_backup_timestamp');
+  let backupStatusText = 'Chưa sao lưu';
+  if (lastBackupStr) {
+    const daysAgo = Math.floor((Date.now() - parseInt(lastBackupStr, 10)) / (1000 * 60 * 60 * 24));
+    backupStatusText = daysAgo === 0 ? 'Hôm nay' : `${daysAgo} ngày trước`;
+  }
 
   const currentVnDay = getCurrentVnDay();
   const now = new Date();
@@ -261,6 +271,44 @@ export async function renderDashboard(onNavigate) {
             </div>
           </div>
         </div>
+
+        <!-- Schedule Notifications Widget -->
+        <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <i data-lucide="bell" class="w-4 h-4 text-indigo-500"></i>
+              Nhắc nhở lịch học
+            </h3>
+            <button id="btn-toggle-notifications" type="button" class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${notifActive ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'}" title="Bật/Tắt nhắc nhở lịch học">
+              <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${notifActive ? 'translate-x-6' : 'translate-x-1'}"></span>
+            </button>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400">
+            Tự động báo chuông trước <strong class="text-slate-700 dark:text-slate-200">10-15 phút</strong> trước mỗi tiết học hôm nay.
+          </p>
+          <div class="mt-3 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">
+            <i data-lucide="info" class="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400"></i>
+            <span><strong>Lưu ý:</strong> Thông báo hoạt động khi có tab StudyHub đang mở hoặc trình duyệt chạy ngầm (ứng dụng client-side).</span>
+          </div>
+        </div>
+
+        <!-- Data Backup Status Widget -->
+        <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <i data-lucide="database" class="w-4 h-4 text-emerald-500"></i>
+              Sao lưu dữ liệu
+            </h3>
+            <span class="text-xs text-slate-500 dark:text-slate-400 font-mono">${backupStatusText}</span>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            Định kỳ tải file JSON sao lưu giúp bảo toàn toàn bộ thời khóa biểu, ghi chú và sơ đồ của bạn.
+          </p>
+          <button id="btn-dash-export-backup" type="button" class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-100 transition cursor-pointer">
+            <i data-lucide="download" class="w-4 h-4"></i>
+            <span>Tải file sao lưu ngay</span>
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -420,6 +468,23 @@ function setupDashboardEvents(container, onNavigate) {
   const btnImages = container.querySelector('#btn-quick-goto-images');
   if (btnImages && onNavigate) {
     btnImages.addEventListener('click', () => onNavigate('imageNotes'));
+  }
+
+  const btnToggleNotif = container.querySelector('#btn-toggle-notifications');
+  if (btnToggleNotif) {
+    btnToggleNotif.addEventListener('click', async () => {
+      const current = await isNotificationEnabled();
+      await toggleNotifications(!current);
+      renderDashboard(onNavigate);
+    });
+  }
+
+  const btnExport = container.querySelector('#btn-dash-export-backup');
+  if (btnExport) {
+    btnExport.addEventListener('click', () => {
+      const backupBtn = document.getElementById('btn-backup-data');
+      if (backupBtn) backupBtn.click();
+    });
   }
 }
 

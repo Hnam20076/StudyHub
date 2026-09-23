@@ -40,6 +40,8 @@ export const WEEK_DATE_RANGES = {
 };
 
 let currentScheduleData = [];
+let linkedNotes = [];
+let linkedMindmaps = [];
 let currentViewMode = 'week'; // 'week' | 'day'
 let currentWeekNumber = 1; // 1 to 16, or 'all'
 let currentSelectedDay = getCurrentVnDay(); // 2 to 8
@@ -53,6 +55,17 @@ export async function initScheduleModule() {
 
 export async function loadSchedules() {
   currentScheduleData = await getAll('schedules');
+  try {
+    const [notes, mindmaps] = await Promise.all([
+      getAll('notes'),
+      getAll('mindmaps')
+    ]);
+    linkedNotes = (notes || []).filter(n => !n.deletedAt);
+    linkedMindmaps = (mindmaps || []).filter(m => !m.deletedAt);
+  } catch (err) {
+    console.warn('Không thể nạp dữ liệu liên kết:', err);
+  }
+
   // Sort by dayOfWeek then by startTime
   currentScheduleData.sort((a, b) => {
     if (a.dayOfWeek !== b.dayOfWeek) {
@@ -61,6 +74,29 @@ export async function loadSchedules() {
     return timeToMinutes(a.startTime) - timeToMinutes(b.startTime);
   });
   return currentScheduleData;
+}
+
+export function getLinkedItemsForClass(item) {
+  const code = (item.subjectCode || '').trim().toLowerCase();
+  const name = (item.subjectName || '').trim().toLowerCase();
+
+  const notes = linkedNotes.filter(n => {
+    const nCode = (n.subjectId || '').trim().toLowerCase();
+    const nName = (n.subjectName || '').trim().toLowerCase();
+    if (code && nCode && code === nCode) return true;
+    if (name && nName && (name === nName || name.includes(nName) || nName.includes(name))) return true;
+    return false;
+  });
+
+  const mindmaps = linkedMindmaps.filter(m => {
+    const mCode = (m.subjectId || '').trim().toLowerCase();
+    const mName = (m.subjectName || '').trim().toLowerCase();
+    if (code && mCode && code === mCode) return true;
+    if (name && mName && (name === mName || name.includes(mName) || mName.includes(name))) return true;
+    return false;
+  });
+
+  return { notes, mindmaps, count: notes.length + mindmaps.length };
 }
 
 export function renderSchedule() {
@@ -367,6 +403,7 @@ function renderDayView(data, currentVnDay, currentMinutes) {
               const endMin = timeToMinutes(item.endTime);
               const isToday = item.dayOfWeek === currentVnDay;
               const isOngoing = isToday && currentMinutes >= startMin && currentMinutes <= endMin;
+              const linked = getLinkedItemsForClass(item);
 
               return `
                 <div class="relative group">
@@ -385,6 +422,13 @@ function renderDayView(data, currentVnDay, currentMinutes) {
                         ${item.classCode ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-mono bg-slate-100 dark:bg-slate-700 text-slate-500 font-medium">${escapeHtml(item.classCode)}</span>` : ''}
                         ${isOngoing ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>Đang diễn ra</span>` : ''}
                         ${renderOnlineBadge(item.room)}
+                        ${linked.count > 0 ? `
+                          <button type="button" class="btn-linked-resources inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-50 dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-semibold border border-indigo-200 dark:border-slate-600 transition cursor-pointer" data-id="${item.id}" title="Xem ghi chú và sơ đồ liên quan">
+                            ${linked.notes.length > 0 ? `<span>📝 ${linked.notes.length} ghi chú</span>` : ''}
+                            ${linked.notes.length > 0 && linked.mindmaps.length > 0 ? `<span class="opacity-40">•</span>` : ''}
+                            ${linked.mindmaps.length > 0 ? `<span>🧠 ${linked.mindmaps.length} sơ đồ</span>` : ''}
+                          </button>
+                        ` : ''}
                       </div>
 
                       <div class="flex items-center gap-1 self-end sm:self-auto">
@@ -439,6 +483,7 @@ function renderClassCard(item, currentVnDay, currentMinutes, isCompact = false) 
   const isToday = item.dayOfWeek === currentVnDay;
   const isOngoing = isToday && currentMinutes >= startMin && currentMinutes <= endMin;
   const isOnline = item.room === 'E-LEARNING' || item.room === 'MS-TEAMS';
+  const linked = getLinkedItemsForClass(item);
 
   return `
     <div class="class-card group relative rounded-xl border ${color.bgLight} ${color.darkBg} p-3 shadow-xs hover:shadow-md transition-all duration-150 ${isOngoing ? 'ring-2 ring-emerald-400 dark:ring-emerald-500 animate-pulse-subtle' : ''}">
@@ -492,6 +537,17 @@ function renderClassCard(item, currentVnDay, currentMinutes, isCompact = false) 
           <span class="truncate">${escapeHtml(item.lecturer || 'Chưa có GV')}</span>
         </div>
       </div>
+
+      <!-- Linked Notes & Mindmaps Badge -->
+      ${linked.count > 0 ? `
+        <div class="mt-2 pt-1.5 border-t border-black/10 dark:border-white/10 flex items-center justify-between">
+          <button type="button" class="btn-linked-resources inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-50/90 dark:bg-slate-700/80 hover:bg-indigo-100 dark:hover:bg-slate-600 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold border border-indigo-200/80 dark:border-slate-600 transition shadow-2xs cursor-pointer" data-id="${item.id}" title="Xem ghi chú và sơ đồ liên quan">
+            ${linked.notes.length > 0 ? `<span>📝 ${linked.notes.length}</span>` : ''}
+            ${linked.notes.length > 0 && linked.mindmaps.length > 0 ? `<span class="opacity-40">•</span>` : ''}
+            ${linked.mindmaps.length > 0 ? `<span>🧠 ${linked.mindmaps.length}</span>` : ''}
+          </button>
+        </div>
+      ` : ''}
 
       ${item.notes && !isCompact ? `
         <div class="mt-2 pt-1.5 border-t border-black/10 dark:border-white/10 text-[10px] italic opacity-80 line-clamp-1">
@@ -614,6 +670,18 @@ function setupScheduleEvents(container) {
         renderSchedule();
         showToast(`Đã xóa buổi học "${item.subjectName}"`, 'success');
       }
+    });
+  });
+
+  // Linked resources modal
+  container.querySelectorAll('.btn-linked-resources').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-id');
+      const item = currentScheduleData.find(s => s.id === id);
+      if (!item) return;
+      const linked = getLinkedItemsForClass(item);
+      openLinkedResourcesModal(item, linked);
     });
   });
 }
@@ -963,3 +1031,111 @@ export function openScheduleFormModal(editingItem = null) {
     window.lucide.createIcons({ root: wrapper });
   }
 }
+
+/**
+ * Open Modal to view linked notes & mindmaps for a class
+ */
+export function openLinkedResourcesModal(item, linked) {
+  const content = `
+    <div class="space-y-4">
+      <div class="p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 flex items-center justify-between">
+        <div>
+          <span class="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">${escapeHtml(item.subjectCode || '')}</span>
+          <h4 class="text-base font-bold text-slate-900 dark:text-white">${escapeHtml(item.subjectName)}</h4>
+        </div>
+        <span class="text-xs px-2.5 py-1 rounded-full bg-indigo-600 text-white font-semibold">${linked.count} tài liệu liên kết</span>
+      </div>
+
+      <!-- Notes Section -->
+      <div>
+        <h5 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-1.5">
+          <span>📝 Ghi chú bài học</span>
+          <span class="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-[10px] font-mono">${linked.notes.length}</span>
+        </h5>
+        ${linked.notes.length === 0 ? `
+          <p class="text-xs text-slate-400 italic py-2">Chưa có ghi chú nào liên kết với môn này.</p>
+        ` : `
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            ${linked.notes.map(n => `
+              <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 flex items-center justify-between gap-3 hover:border-indigo-300 transition">
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">${escapeHtml(n.title)}</div>
+                  <div class="text-[10px] text-slate-400 truncate">${formatDateVietnamese(n.updatedAt || n.createdAt)}</div>
+                </div>
+                <button class="btn-open-linked-note px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shrink-0" data-note-id="${n.id}">
+                  Mở xem
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+
+      <!-- Mindmaps Section -->
+      <div>
+        <h5 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-1.5">
+          <span>🧠 Sơ đồ tư duy</span>
+          <span class="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-[10px] font-mono">${linked.mindmaps.length}</span>
+        </h5>
+        ${linked.mindmaps.length === 0 ? `
+          <p class="text-xs text-slate-400 italic py-2">Chưa có sơ đồ tư duy nào liên kết với môn này.</p>
+        ` : `
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            ${linked.mindmaps.map(m => `
+              <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 flex items-center justify-between gap-3 hover:border-indigo-300 transition">
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">${escapeHtml(m.title)}</div>
+                  <div class="text-[10px] text-slate-400 truncate">${(m.nodes || []).length} nút khái niệm</div>
+                </div>
+                <button class="btn-open-linked-mindmap px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold transition shrink-0" data-mindmap-id="${m.id}">
+                  Mở xem
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+
+  const html = `
+    <div class="p-6">
+      <div class="flex items-center justify-between pb-4 mb-4 border-b border-slate-100 dark:border-slate-800">
+        <h3 class="text-base md:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <i data-lucide="folder-symlink" class="w-5 h-5 text-indigo-600"></i>
+          <span>Tài liệu liên kết môn học</span>
+        </h3>
+        <button id="btn-close-linked-modal" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      ${content}
+    </div>
+  `;
+
+  const modal = openModal(html, { size: 'max-w-lg' });
+  const modalBody = modal ? modal.wrapper : null;
+  if (modalBody) {
+    const closeBtn = modalBody.querySelector('#btn-close-linked-modal');
+    if (closeBtn) closeBtn.addEventListener('click', () => modal.close());
+
+    modalBody.querySelectorAll('.btn-open-linked-note').forEach(btn => {
+      btn.addEventListener('click', () => {
+        modal.close();
+        if (window.studyHubApp && window.studyHubApp.switchView) {
+          window.studyHubApp.switchView('notes');
+        }
+      });
+    });
+
+    modalBody.querySelectorAll('.btn-open-linked-mindmap').forEach(btn => {
+      btn.addEventListener('click', () => {
+        modal.close();
+        if (window.studyHubApp && window.studyHubApp.switchView) {
+          window.studyHubApp.switchView('mindmap');
+        }
+      });
+    });
+  }
+}
+

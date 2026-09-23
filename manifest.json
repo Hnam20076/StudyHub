@@ -1,0 +1,54 @@
+{
+  "name": "StudyHub - Trợ lý Học tập Cá nhân Sinh viên",
+  "short_name": "StudyHub",
+  "description": "Ứng dụng web học tập cá nhân, thời khóa biểu 16 tuần, ghi chú bài học, sơ đồ tư duy và chú thích ảnh slide.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Thời khóa biểu",
+      "short_name": "Lịch học",
+      "description": "Xem thời khóa biểu các tuần",
+      "url": "./index.html#schedule",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ghi chú bài học",
+      "short_name": "Ghi chú",
+      "description": "Xem và tạo ghi chú",
+      "url": "./index.html#notes",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Sơ đồ tư duy",
+      "short_name": "Mindmap",
+      "description": "Mở sơ đồ tư duy",
+      "url": "./index.html#mindmap",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

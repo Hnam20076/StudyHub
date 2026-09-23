@@ -3,7 +3,7 @@
  * Supports Create/Edit/Delete, Search, Filter by Subject/Topic/Tag, Pinned notes, and Interactive Checklists.
  */
 
-import { getAll, saveItem, deleteItem, getById } from '../db.js';
+import { getAll, saveItem, deleteItem, getById, softDeleteItem, restoreItem } from '../db.js';
 import {
   generateId,
   SUBJECT_COLORS,
@@ -28,7 +28,8 @@ export async function initNotesModule() {
 }
 
 export async function loadNotesAndSubjects() {
-  currentNotesData = await getAll('notes');
+  const allNotes = await getAll('notes');
+  currentNotesData = allNotes.filter(n => !n.deletedAt);
   const schedules = await getAll('schedules');
 
   // Combine unique subject names from both schedules and existing notes
@@ -632,7 +633,7 @@ function setupNotesEvents(container) {
     });
   });
 
-  // Delete note
+  // Delete note (Soft delete to trash with 30-day retention and undo)
   container.querySelectorAll('.btn-delete-note').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -640,18 +641,19 @@ function setupNotesEvents(container) {
       const note = currentNotesData.find(n => n.id === id);
       if (!note) return;
 
-      const confirmed = await confirmDialog({
-        title: 'Xóa ghi chú bài học',
-        message: `Bạn có chắc chắn muốn xóa ghi chú "${note.title}"? Dữ liệu này sẽ không thể khôi phục.`,
-        confirmText: 'Xóa vĩnh viễn'
-      });
+      await softDeleteItem('notes', id);
+      await loadNotesAndSubjects();
+      renderNotesView();
 
-      if (confirmed) {
-        await deleteItem('notes', id);
-        await loadNotesAndSubjects();
-        renderNotesView();
-        showToast(`Đã xóa ghi chú "${note.title}"`, 'success');
-      }
+      showToast(`Đã chuyển ghi chú "${note.title}" vào thùng rác`, 'info', 5000, {
+        label: 'Hoàn tác',
+        onClick: async () => {
+          await restoreItem('notes', id);
+          await loadNotesAndSubjects();
+          renderNotesView();
+          showToast(`Đã khôi phục ghi chú "${note.title}" thành công!`, 'success');
+        }
+      });
     });
   });
 }
@@ -936,10 +938,20 @@ export function openNoteFormModal(editingItem = null) {
         }).filter(Boolean)
       : [];
 
+    const subjectCodeMap = {
+      'Kỹ thuật số': '71ELEC30083',
+      'Kỹ năng công dân toàn cầu': '71SSK110023',
+      'Hệ thống và điều khiển': '71ELEC30163',
+      'Cơ học vật liệu': '71MECA30023',
+      'Tư tưởng Hồ Chí Minh': '71POLH10042'
+    };
+    const subjectId = subjectCodeMap[subjectName] || (editingItem ? editingItem.subjectId : '') || '';
+
     const nowIso = new Date().toISOString();
     const noteToSave = {
       id: editingItem ? editingItem.id : generateId(),
       title,
+      subjectId,
       subjectName,
       topic,
       tags,

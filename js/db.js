@@ -113,6 +113,87 @@ export async function deleteItem(storeName, id) {
   });
 }
 
+/**
+ * Soft Delete: Marks item as deleted with timestamp (retained for 30 days)
+ */
+export async function softDeleteItem(storeName, id) {
+  const item = await getById(storeName, id);
+  if (!item) return null;
+  item.deletedAt = new Date().toISOString();
+  await saveItem(storeName, item);
+  return item;
+}
+
+/**
+ * Restore an item from Trash
+ */
+export async function restoreItem(storeName, id) {
+  const item = await getById(storeName, id);
+  if (!item) return null;
+  delete item.deletedAt;
+  await saveItem(storeName, item);
+  return item;
+}
+
+/**
+ * Get all soft-deleted items across Notes, Mindmaps, and ImageNotes.
+ * Automatically purges items deleted more than 30 days ago.
+ */
+export async function getTrashItems() {
+  const stores = ['notes', 'mindmaps', 'imageNotes'];
+  const trashItems = [];
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  for (const store of stores) {
+    const items = await getAll(store);
+    for (const item of items) {
+      if (item.deletedAt) {
+        const deletedTime = new Date(item.deletedAt).getTime();
+        const ageMs = now - deletedTime;
+
+        if (ageMs > THIRTY_DAYS_MS) {
+          // Permanently purge items older than 30 days
+          await deleteItem(store, item.id);
+        } else {
+          const daysRemaining = Math.max(0, 30 - Math.floor(ageMs / (24 * 60 * 60 * 1000)));
+          trashItems.push({
+            ...item,
+            _storeName: store,
+            _typeName: store === 'notes' ? 'Ghi chú' : store === 'mindmaps' ? 'Sơ đồ tư duy' : 'Chú thích ảnh',
+            _typeIcon: store === 'notes' ? 'file-text' : store === 'mindmaps' ? 'git-merge' : 'image',
+            _typeColor: store === 'notes' ? 'emerald' : store === 'mindmaps' ? 'amber' : 'rose',
+            _daysRemaining: daysRemaining
+          });
+        }
+      }
+    }
+  }
+
+  // Sort newest deleted first
+  trashItems.sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
+  return trashItems;
+}
+
+/**
+ * Permanently empty all items in Trash
+ */
+export async function emptyTrash() {
+  const items = await getTrashItems();
+  for (const item of items) {
+    await deleteItem(item._storeName, item.id);
+  }
+  return true;
+}
+
+/**
+ * Count total items currently in Trash
+ */
+export async function countTrashItems() {
+  const items = await getTrashItems();
+  return items.length;
+}
+
 export async function clearStore(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -162,29 +243,33 @@ export async function seedInitialScheduleIfEmpty() {
  * Seed initial sample notes if database is freshly empty
  */
 export async function seedInitialNotesIfEmpty() {
-  const existing = await getAll('notes');
-  if (existing.length > 0) return existing;
+  const version = await getSetting('notes_dataset_version');
+  if (version === 'v2_subjects_linked') {
+    const existing = await getAll('notes');
+    if (existing.length > 0) return existing;
+  }
 
   const sampleNotes = [
     {
       id: 'note_1',
-      title: 'Ôn tập Thuật toán Cây AVL & Cân bằng xoay',
-      subjectName: 'Cấu trúc Dữ liệu & Giải thuật',
-      topic: 'Cấu trúc dữ liệu',
-      content: `### Khái niệm cây AVL
-Cây AVL là cây nhị phân tìm kiếm tự cân bằng, trong đó độ cao chênh lệch giữa hai cây con của bất kỳ nút nào không quá 1 (hệ số cân bằng thuộc {-1, 0, 1}).
+      title: 'Hệ thống số & Đại số Boolean trong Kỹ thuật số',
+      subjectId: '71ELEC30083',
+      subjectName: 'Kỹ thuật số',
+      topic: 'Lý thuyết mạch số',
+      content: `### 1. Các hệ thống số cơ bản:
+- **Hệ nhị phân (Binary):** Cơ số 2 (0, 1)
+- **Hệ thập lục phân (Hexadecimal):** Cơ số 16 (0-9, A-F)
+- Chuyển đổi giữa Nhị phân và Hex theo nhóm 4-bit.
 
-### 4 Trường hợp mất cân bằng & Phép xoay:
-1. **Lệch Trái - Trái (Left-Left):** Thực hiện phép xoay Đơn sang Phải (Single Right Rotation).
-2. **Lệch Phải - Phải (Right-Right):** Thực hiện phép xoay Đơn sang Trái (Single Left Rotation).
-3. **Lệch Trái - Phải (Left-Right):** Xoay Trái tại con trái, sau đó xoay Phải tại nút gốc.
-4. **Lệch Phải - Trái (Right-Left):** Xoay Phải tại con phải, sau đó xoay Trái tại nút gốc.
+### 2. Định lý De Morgan:
+- \`!(A . B) = !A + !B\`
+- \`!(A + B) = !A . !B\`
 
-### Danh sách nhiệm vụ ôn thi:
-- [x] Đọc lại slide bài giảng chương 4
-- [x] Cài đặt thuật toán xoay bằng C++/Java
-- [ ] Giải 5 bài tập vẽ cây AVL sau khi thêm các khóa: 10, 20, 15, 25, 5, 1`,
-      tags: ['#AVL', '#BST', '#ThiGiuaKy', '#GiaiThuat'],
+### Checklist bài tập:
+- [x] Rút gọn biểu thức logic bằng bìa Karnaugh (K-map 4 biến)
+- [x] Thiết kế mạch cộng toàn phần (Full Adder) bằng cổng NAND
+- [ ] Mô phỏng mạch đếm Mod-10 trên Logisim`,
+      tags: ['#KyThuatSo', '#Boolean', '#Karnaugh', '#MachSo'],
       isPinned: true,
       color: 'sky',
       createdAt: '2026-09-20T08:30:00.000Z',
@@ -192,22 +277,20 @@ Cây AVL là cây nhị phân tìm kiếm tự cân bằng, trong đó độ cao
     },
     {
       id: 'note_2',
-      title: 'Bí kíp Layout CSS Flexbox & Responsive Design',
-      subjectName: 'Lập trình Web & Ứng dụng',
-      topic: 'Thực hành Web',
-      content: `### Các thuộc tính quan trọng trên Flex Container:
-- \`display: flex;\` - Kích hoạt flex context
-- \`flex-direction: row | column | row-reverse\`
-- \`justify-content: flex-start | center | space-between | space-around | space-evenly\` (căn theo trục chính)
-- \`align-items: stretch | center | flex-start | flex-end\` (căn theo trục phụ)
-- \`flex-wrap: nowrap | wrap\`
+      title: 'Tư duy phản biện & Giao tiếp đa văn hóa',
+      subjectId: '71SSK110023',
+      subjectName: 'Kỹ năng công dân toàn cầu',
+      topic: 'Kỹ năng mềm',
+      content: `### 1. Mô hình tư duy phản biện RED:
+- **R - Recognize assumptions:** Nhận diện các giả định ngầm.
+- **E - Evaluate arguments:** Đánh giá độ tin cậy và logic của lập luận.
+- **D - Draw conclusions:** Rút ra kết luận khách quan dựa trên chứng cứ.
 
-### Checklist bài tập lớn:
-- [x] Phân chia component Header, Sidebar, Content
-- [x] Tối ưu hiển thị trên màn hình điện thoại 375px
-- [ ] Thử nghiệm dark mode với biến CSS
-- [ ] Kiểm thử responsive trên các trình duyệt Edge/Chrome`,
-      tags: ['#CSS', '#Flexbox', '#Frontend', '#BaiTapLon'],
+### 2. Kế hoạch bài tập nhóm:
+- [x] Họp nhóm phân chia chủ đề thuyết trình tuần 3
+- [x] Tìm kiếm tài liệu case study về phát triển bền vững (SDGs)
+- [ ] Hoàn thành slide trình bày PowerPoint`,
+      tags: ['#CongDanToanCau', '#SoftSkills', '#CriticalThinking'],
       isPinned: false,
       color: 'emerald',
       createdAt: '2026-09-21T10:00:00.000Z',
@@ -215,22 +298,17 @@ Cây AVL là cây nhị phân tìm kiếm tự cân bằng, trong đó độ cao
     },
     {
       id: 'note_3',
-      title: 'Phương pháp giải Phương trình Vi phân tuyến tính cấp 2',
-      subjectName: 'Giải tích 2',
-      topic: 'Lý thuyết toán',
-      content: `### Dạng tổng quát:
-y'' + p*y' + q*y = f(x)
+      title: 'Hàm truyền & Đáp ứng tần số của Hệ thống điều khiển',
+      subjectId: '71ELEC30163',
+      subjectName: 'Hệ thống và điều khiển',
+      topic: 'Lý thuyết điều khiển',
+      content: `### 1. Khái niệm Hàm truyền (Transfer Function):
+Hàm truyền G(s) = Y(s) / U(s) là tỉ số giữa biến đổi Laplace của tín hiệu ra và tín hiệu vào với điều kiện ban đầu bằng 0.
 
-### 1. Giải phương trình thuần nhất liên kết:
-Phương trình đặc trưng: k^2 + p*k + q = 0
-- Trường hợp 1: Delta > 0 có 2 nghiệm phân biệt k1, k2 => y0 = C1*e^(k1*x) + C2*e^(k2*x)
-- Trường hợp 2: Delta = 0 có nghiệm kép k0 => y0 = (C1 + C2*x)*e^(k0*x)
-- Trường hợp 3: Delta < 0 có nghiệm phức k = alpha +- i*beta => y0 = e^(alpha*x) * (C1*cos(beta*x) + C2*sin(beta*x))
-
-### Lưu ý khi làm bài kiểm tra:
-- Luôn kiểm tra kỹ dấu khi tính delta
-- Chú ý dạng vế phải f(x) để chọn dạng nghiệm riêng phù hợp!`,
-      tags: ['#GiaiTich', '#ViPhan', '#ToanDaiHoc', '#OnTap'],
+### 2. Tiêu chuẩn ổn định Routh-Hurwitz:
+- Lập bảng Routh từ đa thức đặc trưng A(s).
+- Hệ thống ổn định khi và chỉ khi tất cả các phần tử ở cột thứ nhất của bảng Routh cùng dấu.`,
+      tags: ['#HeThongDieuKhien', '#Laplace', '#RouthHurwitz'],
       isPinned: true,
       color: 'indigo',
       createdAt: '2026-09-22T09:10:00.000Z',
@@ -238,10 +316,11 @@ Phương trình đặc trưng: k^2 + p*k + q = 0
     }
   ];
 
+  await clearStore('notes');
   for (const item of sampleNotes) {
     await saveItem('notes', item);
   }
-
+  await setSetting('notes_dataset_version', 'v2_subjects_linked');
   return sampleNotes;
 }
 
@@ -249,39 +328,45 @@ Phương trình đặc trưng: k^2 + p*k + q = 0
  * Seed initial sample mindmap if database is freshly empty
  */
 export async function seedInitialMindmapsIfEmpty() {
-  const existing = await getAll('mindmaps');
-  if (existing.length > 0) return existing;
+  const version = await getSetting('mindmaps_dataset_version');
+  if (version === 'v2_subjects_linked') {
+    const existing = await getAll('mindmaps');
+    if (existing.length > 0) return existing;
+  }
 
   const sampleMindmap = {
     id: 'mm_1',
-    title: 'Sơ đồ Cấu trúc Dữ liệu & Giải thuật',
-    subjectName: 'Cấu trúc Dữ liệu & Giải thuật',
+    title: 'Sơ đồ Tổng quan Mạch Logic Kỹ thuật số',
+    subjectId: '71ELEC30083',
+    subjectName: 'Kỹ thuật số',
     createdAt: '2026-09-21T09:00:00.000Z',
     updatedAt: '2026-09-23T15:30:00.000Z',
     nodes: [
-      { id: 'root', text: 'Cấu trúc Dữ liệu & Giải thuật', x: 440, y: 260, color: 'indigo', isRoot: true },
-      // Branch 1: Tuyến tính
-      { id: 'node_linear', parentId: 'root', text: '1. Cấu trúc Tuyến tính', x: 140, y: 150, color: 'sky' },
-      { id: 'node_array', parentId: 'node_linear', text: 'Mảng (Array)', x: -80, y: 100, color: 'sky' },
-      { id: 'node_linkedlist', parentId: 'node_linear', text: 'Danh sách liên kết', x: -110, y: 160, color: 'sky' },
-      { id: 'node_stackqueue', parentId: 'node_linear', text: 'Ngăn xếp & Hàng đợi', x: -110, y: 220, color: 'sky' },
-      // Branch 2: Phi tuyến tính
-      { id: 'node_nonlinear', parentId: 'root', text: '2. Cấu trúc Phi tuyến tính', x: 740, y: 150, color: 'emerald' },
-      { id: 'node_binarytree', parentId: 'node_nonlinear', text: 'Cây nhị phân (Binary Tree)', x: 970, y: 100, color: 'emerald' },
-      { id: 'node_avltree', parentId: 'node_nonlinear', text: 'Cây AVL tự cân bằng', x: 970, y: 160, color: 'emerald' },
-      { id: 'node_graph', parentId: 'node_nonlinear', text: 'Đồ thị (Graph / BFS / DFS)', x: 970, y: 220, color: 'emerald' },
-      // Branch 3: Thuật toán sắp xếp
-      { id: 'node_sorting', parentId: 'root', text: '3. Giải thuật Sắp xếp', x: 260, y: 400, color: 'amber' },
-      { id: 'node_quicksort', parentId: 'node_sorting', text: 'QuickSort (O(n log n))', x: 160, y: 480, color: 'amber' },
-      { id: 'node_mergesort', parentId: 'node_sorting', text: 'MergeSort (O(n log n))', x: 380, y: 480, color: 'amber' },
-      // Branch 4: Đánh giá độ phức tạp
-      { id: 'node_complexity', parentId: 'root', text: '4. Đánh giá Big-O', x: 620, y: 400, color: 'rose' },
-      { id: 'node_time', parentId: 'node_complexity', text: 'Thời gian O(n), O(log n)', x: 600, y: 480, color: 'rose' },
-      { id: 'node_space', parentId: 'node_complexity', text: 'Bộ nhớ phụ (Space)', x: 800, y: 480, color: 'rose' }
+      { id: 'root', text: 'Kỹ thuật số', x: 440, y: 260, color: 'indigo', isRoot: true },
+      // Branch 1: Mạch tổ hợp
+      { id: 'node_comb', parentId: 'root', text: '1. Mạch Tổ hợp (Combinational)', x: 140, y: 150, color: 'sky' },
+      { id: 'node_gates', parentId: 'node_comb', text: 'Cổng logic (AND, OR, NOT, NAND)', x: -80, y: 100, color: 'sky' },
+      { id: 'node_adder', parentId: 'node_comb', text: 'Mạch cộng (Half/Full Adder)', x: -110, y: 160, color: 'sky' },
+      { id: 'node_mux', parentId: 'node_comb', text: 'Bộ ghép kênh (MUX / DEMUX)', x: -110, y: 220, color: 'sky' },
+      // Branch 2: Mạch tuần tự
+      { id: 'node_seq', parentId: 'root', text: '2. Mạch Tuần tự (Sequential)', x: 740, y: 150, color: 'emerald' },
+      { id: 'node_flipflop', parentId: 'node_seq', text: 'Flip-Flop (D, JK, T)', x: 970, y: 100, color: 'emerald' },
+      { id: 'node_registers', parentId: 'node_seq', text: 'Thanh ghi dịch (Shift Register)', x: 970, y: 160, color: 'emerald' },
+      { id: 'node_counter', parentId: 'node_seq', text: 'Mạch đếm nhị phân (Counters)', x: 970, y: 220, color: 'emerald' },
+      // Branch 3: Phương pháp tối ưu
+      { id: 'node_opt', parentId: 'root', text: '3. Tối ưu hàm logic', x: 260, y: 400, color: 'amber' },
+      { id: 'node_boolean', parentId: 'node_opt', text: 'Đại số Boolean & De Morgan', x: 160, y: 480, color: 'amber' },
+      { id: 'node_kmap', parentId: 'node_opt', text: 'Bìa Karnaugh (K-Map)', x: 380, y: 480, color: 'amber' },
+      // Branch 4: Chuyển đổi tín hiệu
+      { id: 'node_conv', parentId: 'root', text: '4. Chuyển đổi D/A & A/D', x: 620, y: 400, color: 'rose' },
+      { id: 'node_dac', parentId: 'node_conv', text: 'DAC: Mạng điện trở R-2R', x: 600, y: 480, color: 'rose' },
+      { id: 'node_adc', parentId: 'node_conv', text: 'ADC: Lấy mẫu & Lượng tử hóa', x: 800, y: 480, color: 'rose' }
     ]
   };
 
+  await clearStore('mindmaps');
   await saveItem('mindmaps', sampleMindmap);
+  await setSetting('mindmaps_dataset_version', 'v2_subjects_linked');
   return [sampleMindmap];
 }
 
@@ -352,8 +437,9 @@ export async function seedInitialImageNotesIfEmpty() {
 
   const sampleImageNote = {
     id: 'img_1',
-    title: 'Slide Chương 3: Luồng dữ liệu Kiến trúc Client - Server',
-    subjectName: 'Lập trình Web & Ứng dụng',
+    title: 'Slide Chương 3: Sơ đồ Mạch Logic Kỹ thuật số',
+    subjectId: '71ELEC30083',
+    subjectName: 'Kỹ thuật số',
     imageData: dataUrl,
     createdAt: '2026-09-22T14:00:00.000Z',
     updatedAt: '2026-09-23T16:00:00.000Z',
@@ -389,6 +475,7 @@ export async function seedInitialImageNotesIfEmpty() {
   };
 
   await saveItem('imageNotes', sampleImageNote);
+  await setSetting('image_notes_dataset_version', 'v2_subjects_linked');
   return [sampleImageNote];
 }
 

@@ -3,7 +3,7 @@
  * Upload, Drag & Drop, Clipboard Paste (Ctrl+V), Interactive Pins & Annotations, Dual-Pane View, and Auto-save.
  */
 
-import { getAll, saveItem, deleteItem, getById } from '../db.js';
+import { getAll, saveItem, deleteItem, getById, softDeleteItem, restoreItem } from '../db.js';
 import {
   generateId,
   SUBJECT_COLORS,
@@ -26,7 +26,8 @@ export async function initImageNotesModule() {
 }
 
 export async function loadImageNotes() {
-  currentImageNotes = await getAll('imageNotes');
+  const allImageNotes = await getAll('imageNotes');
+  currentImageNotes = allImageNotes.filter(i => !i.deletedAt);
   currentImageNotes.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
   return currentImageNotes;
 }
@@ -167,18 +168,19 @@ function renderImageNotesGallery(container) {
       const item = currentImageNotes.find(n => n.id === id);
       if (!item) return;
 
-      const confirmed = await confirmDialog({
-        title: 'Xóa bài giảng ảnh',
-        message: `Bạn có chắc chắn muốn xóa bài ảnh "${item.title}" cùng toàn bộ chú thích?`,
-        confirmText: 'Xóa vĩnh viễn'
-      });
+      await softDeleteItem('imageNotes', id);
+      await loadImageNotes();
+      renderImageNotesView();
 
-      if (confirmed) {
-        await deleteItem('imageNotes', id);
-        await loadImageNotes();
-        renderImageNotesView();
-        showToast(`Đã xóa bài ảnh "${item.title}"`, 'success');
-      }
+      showToast(`Đã chuyển "${item.title}" vào thùng rác`, 'info', 5000, {
+        label: 'Hoàn tác',
+        onClick: async () => {
+          await restoreItem('imageNotes', id);
+          await loadImageNotes();
+          renderImageNotesView();
+          showToast(`Đã khôi phục "${item.title}"`, 'success');
+        }
+      });
     });
   });
 }
