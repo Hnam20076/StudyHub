@@ -2,6 +2,15 @@
  * Modal Dialog Component
  */
 
+let activeModals = [];
+
+export function closeModal() {
+  if (activeModals.length > 0) {
+    const topClose = activeModals.pop();
+    if (topClose) topClose();
+  }
+}
+
 export function openModal(htmlContent, { onClose = null, size = 'max-w-lg' } = {}) {
   const container = document.getElementById('modal-container');
   if (!container) return null;
@@ -21,9 +30,13 @@ export function openModal(htmlContent, { onClose = null, size = 'max-w-lg' } = {
     if (inner) inner.classList.add('scale-95');
     setTimeout(() => {
       modalWrapper.remove();
+      const idx = activeModals.indexOf(close);
+      if (idx !== -1) activeModals.splice(idx, 1);
       if (onClose) onClose();
     }, 200);
   };
+
+  activeModals.push(close);
 
   // Close on backdrop click (outside the modal box)
   modalWrapper.addEventListener('click', (e) => {

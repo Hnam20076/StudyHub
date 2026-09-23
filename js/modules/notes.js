@@ -30,10 +30,14 @@ export async function initNotesModule() {
 export async function loadNotesAndSubjects() {
   const allNotes = await getAll('notes');
   currentNotesData = allNotes.filter(n => !n.deletedAt);
-  const schedules = await getAll('schedules');
+  const [schedules, subjects] = await Promise.all([
+    getAll('schedules'),
+    getAll('subjects')
+  ]);
 
-  // Combine unique subject names from both schedules and existing notes
+  // Combine unique subject names from subjects store, schedules and existing notes
   const set = new Set();
+  subjects.forEach(s => { if (s.name) set.add(s.name); });
   schedules.forEach(s => { if (s.subjectName) set.add(s.subjectName); });
   currentNotesData.forEach(n => { if (n.subjectName) set.add(n.subjectName); });
   availableSubjects = Array.from(set).sort();

@@ -7,6 +7,8 @@ Desktop.ini
 debug_*.png
 tthcm_*.png
 test_*.png
+desktop_*.png
+mobile_*.png
 pdf_pages/
 scratch/
 extract_data.py

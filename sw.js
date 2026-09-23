@@ -3,7 +3,7 @@
  * Enables installability (Add to Home Screen) and full offline operation.
  */
 
-const CACHE_NAME = 'studyhub-cache-v1';
+const CACHE_NAME = 'studyhub-cache-v2';
 
 const STATIC_ASSETS = [
   './',
@@ -19,11 +19,18 @@ const STATIC_ASSETS = [
   './js/components/toast.js',
   './js/components/search.js',
   './js/components/trashModal.js',
+  './js/components/attachments.js',
+  './js/modules/dashboard.js',
+  './js/modules/subjects.js',
   './js/modules/schedule.js',
+  './js/modules/tasks.js',
   './js/modules/notes.js',
   './js/modules/mindmap.js',
   './js/modules/imageNotes.js',
-  './js/modules/dashboard.js',
+  './js/modules/exams.js',
+  './js/modules/grades.js',
+  './js/modules/progress.js',
+  './js/modules/timer.js',
   './js/modules/notification.js',
   './icons/icon-192.png',
   './icons/icon-512.png',

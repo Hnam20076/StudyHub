@@ -1,10 +1,18 @@
 /**
- * Global Search Command Palette (Ctrl+K / Cmd+K)
- * Fast client-side fuzzy search across Notes, Mindmaps, Image Notes, and Schedules.
+ * Global Omnisearch Command Palette (Ctrl+K / Cmd+K)
+ * Fast client-side fuzzy search across all 7 entities:
+ * 1. Môn học (Subjects)
+ * 2. Thời khóa biểu (Schedules)
+ * 3. Ghi chú bài học (Notes)
+ * 4. Nhiệm vụ & Deadline (Tasks)
+ * 5. Kỳ thi & Kiểm tra (Exams)
+ * 6. File tài liệu đính kèm (Attachments)
+ * 7. Sơ đồ tư duy & Chú thích ảnh (Mindmaps & Image Notes)
  */
 
 import { getAll } from '../db.js';
 import { escapeHtml } from '../utils/helpers.js';
+import { openSubjectDetailModal } from '../modules/subjects.js';
 
 let isPaletteOpen = false;
 let searchModalElement = null;
@@ -49,17 +57,17 @@ export function openSearchPalette() {
   // Create Palette overlay
   searchModalElement = document.createElement('div');
   searchModalElement.id = 'global-search-modal';
-  searchModalElement.className = 'fixed inset-0 z-50 flex items-start justify-center pt-16 md:pt-24 px-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in select-none';
+  searchModalElement.className = 'fixed inset-0 z-50 flex items-start justify-center pt-12 md:pt-20 px-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in select-none';
 
   searchModalElement.innerHTML = `
-    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl md:rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh] animate-scale-up" onclick="event.stopPropagation()">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl md:rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[82vh] animate-scale-up" onclick="event.stopPropagation()">
       <!-- Search Input Bar -->
       <div class="p-3 md:p-4 border-b border-slate-100 dark:border-slate-800 flex items-center gap-3">
         <i data-lucide="search" class="w-5 h-5 text-indigo-500 flex-shrink-0"></i>
         <input
           id="global-search-input"
           type="text"
-          placeholder="Tìm kiếm môn học, ghi chú, sơ đồ tư duy, ảnh slide..."
+          placeholder="Tìm môn học, deadline, kỳ thi, ghi chú, sơ đồ, tài liệu..."
           class="flex-1 bg-transparent border-none outline-none text-sm md:text-base text-slate-900 dark:text-white placeholder-slate-400"
           autocomplete="off"
         />
@@ -67,19 +75,19 @@ export function openSearchPalette() {
           <kbd class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono">ESC</kbd>
           <span>để đóng</span>
         </div>
-        <button id="btn-close-palette" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 sm:hidden">
+        <button id="btn-close-palette" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 sm:hidden cursor-pointer">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
 
       <!-- Search Results Area -->
-      <div id="search-results-container" class="flex-1 overflow-y-auto p-3 space-y-4 max-h-[60vh]">
+      <div id="search-results-container" class="flex-1 overflow-y-auto p-3 space-y-4 max-h-[62vh]">
         <div class="py-12 text-center text-slate-400 text-xs">
           <div class="w-10 h-10 mx-auto rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-500 flex items-center justify-center mb-2">
             <i data-lucide="compass" class="w-5 h-5"></i>
           </div>
-          <p class="font-semibold text-slate-600 dark:text-slate-300">Nhập từ khóa để tìm kiếm trong StudyHub</p>
-          <p class="text-[11px] mt-0.5">Hỗ trợ tìm kiếm theo tên môn, phòng học, nội dung bài ghi, nút sơ đồ...</p>
+          <p class="font-semibold text-slate-600 dark:text-slate-300">Nhập từ khóa để tìm kiếm toàn diện</p>
+          <p class="text-[11px] mt-0.5">Tìm xuyên suốt 7 đối tượng: Môn học, TKB, Bài tập, Kỳ thi, Ghi chú, Sơ đồ, Tài liệu...</p>
         </div>
       </div>
 
@@ -87,7 +95,7 @@ export function openSearchPalette() {
       <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-850 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
         <div class="flex items-center gap-3">
           <span><kbd class="font-mono bg-white dark:bg-slate-800 px-1 py-0.5 rounded border border-slate-200 dark:border-slate-700">↑</kbd> <kbd class="font-mono bg-white dark:bg-slate-800 px-1 py-0.5 rounded border border-slate-200 dark:border-slate-700">↓</kbd> Di chuyển</span>
-          <span><kbd class="font-mono bg-white dark:bg-slate-800 px-1 py-0.5 rounded border border-slate-200 dark:border-slate-700">↵</kbd> Mở</span>
+          <span><kbd class="font-mono bg-white dark:bg-slate-800 px-1 py-0.5 rounded border border-slate-200 dark:border-slate-700">↵</kbd> Mở ngay</span>
         </div>
         <span id="search-result-count" class="font-medium"></span>
       </div>
@@ -101,32 +109,28 @@ export function openSearchPalette() {
     }
   });
 
-  document.body.appendChild(searchModalElement);
+  const closeBtn = searchModalElement.querySelector('#btn-close-palette');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', closeSearchPalette);
+  }
 
+  const input = searchModalElement.querySelector('#global-search-input');
+  input.addEventListener('input', (e) => {
+    executeGlobalSearch(e.target.value.trim());
+  });
+
+  input.addEventListener('keydown', handleKeyNavigation);
+
+  document.body.appendChild(searchModalElement);
   if (window.lucide) {
     window.lucide.createIcons({ root: searchModalElement });
   }
 
-  const input = searchModalElement.querySelector('#global-search-input');
-  const closeBtn = searchModalElement.querySelector('#btn-close-palette');
-  if (closeBtn) closeBtn.addEventListener('click', closeSearchPalette);
-
-  if (input) {
-    input.focus();
-    let debounceTimer = null;
-    input.addEventListener('input', (e) => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        executeGlobalSearch(e.target.value.trim());
-      }, 150);
-    });
-
-    input.addEventListener('keydown', handleKeyNavigation);
-  }
+  // Auto focus input
+  setTimeout(() => input.focus(), 50);
 }
 
 export function closeSearchPalette() {
-  if (!isPaletteOpen) return;
   isPaletteOpen = false;
   if (searchModalElement && searchModalElement.parentNode) {
     searchModalElement.parentNode.removeChild(searchModalElement);
@@ -189,8 +193,8 @@ async function executeGlobalSearch(query) {
         <div class="w-10 h-10 mx-auto rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-500 flex items-center justify-center mb-2">
           <i data-lucide="compass" class="w-5 h-5"></i>
         </div>
-        <p class="font-semibold text-slate-600 dark:text-slate-300">Nhập từ khóa để tìm kiếm trong StudyHub</p>
-        <p class="text-[11px] mt-0.5">Hỗ trợ tìm kiếm theo tên môn, phòng học, nội dung bài ghi, nút sơ đồ...</p>
+        <p class="font-semibold text-slate-600 dark:text-slate-300">Nhập từ khóa để tìm kiếm toàn diện</p>
+        <p class="text-[11px] mt-0.5">Tìm xuyên suốt 7 đối tượng: Môn học, TKB, Bài tập, Kỳ thi, Ghi chú, Sơ đồ, Tài liệu...</p>
       </div>
     `;
     if (countEl) countEl.textContent = '';
@@ -201,14 +205,92 @@ async function executeGlobalSearch(query) {
 
   const qLower = query.toLowerCase();
 
-  const [schedules, notes, mindmaps, imageNotes] = await Promise.all([
+  const [
+    subjects,
+    schedules,
+    tasks,
+    exams,
+    notes,
+    mindmaps,
+    imageNotes,
+    attachments
+  ] = await Promise.all([
+    getAll('subjects'),
     getAll('schedules'),
+    getAll('tasks'),
+    getAll('exams'),
     getAll('notes'),
     getAll('mindmaps'),
-    getAll('imageNotes')
+    getAll('imageNotes'),
+    getAll('attachments')
   ]);
 
-  // 1. Schedules
+  // Map subjects for quick lookup
+  const subjectMap = new Map();
+  subjects.forEach(s => subjectMap.set(s.id, s));
+
+  // 1. Subjects (Môn học)
+  const matchedSubjects = (subjects || []).filter(s => !s.deletedAt).filter(s => {
+    return (s.name && s.name.toLowerCase().includes(qLower)) ||
+      (s.code && s.code.toLowerCase().includes(qLower)) ||
+      (s.lecturer && s.lecturer.toLowerCase().includes(qLower)) ||
+      (s.description && s.description.toLowerCase().includes(qLower));
+  }).map(s => ({
+    type: 'subject',
+    typeLabel: 'Môn học',
+    icon: 'book-open',
+    color: 'indigo',
+    viewId: 'subjects',
+    id: s.id,
+    title: s.name,
+    subtitle: `Mã: ${s.code} • ${s.credits || 3} tín chỉ • GV: ${s.lecturer || 'Chưa cập nhật'}`,
+    matchedSnippet: s.description ? s.description.slice(0, 100) : ''
+  }));
+
+  // 2. Tasks & Deadlines (Nhiệm vụ)
+  const matchedTasks = (tasks || []).filter(t => !t.deletedAt).filter(t => {
+    const sub = subjectMap.get(t.subjectId);
+    return (t.title && t.title.toLowerCase().includes(qLower)) ||
+      (t.description && t.description.toLowerCase().includes(qLower)) ||
+      (sub && sub.name.toLowerCase().includes(qLower));
+  }).map(t => {
+    const sub = subjectMap.get(t.subjectId);
+    return {
+      type: 'task',
+      typeLabel: 'Nhiệm vụ / Deadline',
+      icon: 'check-square',
+      color: 'amber',
+      viewId: 'tasks',
+      id: t.id,
+      title: t.title,
+      subtitle: `Hạn: ${t.dueDate || 'Không có'} • Môn: ${sub?.name || 'Chung'} • Ưu tiên: ${t.priority || 'vừa'}`,
+      matchedSnippet: t.description ? t.description.slice(0, 100) : ''
+    };
+  });
+
+  // 3. Exams (Kỳ thi)
+  const matchedExams = (exams || []).filter(e => !e.deletedAt).filter(e => {
+    const sub = subjectMap.get(e.subjectId);
+    return (e.type && e.type.toLowerCase().includes(qLower)) ||
+      (e.room && e.room.toLowerCase().includes(qLower)) ||
+      (e.notes && e.notes.toLowerCase().includes(qLower)) ||
+      (sub && sub.name.toLowerCase().includes(qLower));
+  }).map(e => {
+    const sub = subjectMap.get(e.subjectId);
+    return {
+      type: 'exam',
+      typeLabel: 'Kỳ thi',
+      icon: 'award',
+      color: 'rose',
+      viewId: 'exams',
+      id: e.id,
+      title: `${e.type || 'Thi'} - ${sub?.name || 'Môn học'}`,
+      subtitle: `Ngày: ${e.examDate || 'Chưa có'} ${e.examTime ? `(${e.examTime})` : ''} • Phòng: ${e.room || 'Chưa có'}`,
+      matchedSnippet: e.notes ? e.notes.slice(0, 100) : ''
+    };
+  });
+
+  // 4. Schedules (Thời khóa biểu)
   const matchedSchedules = (schedules || []).filter(s => {
     return (s.subjectName && s.subjectName.toLowerCase().includes(qLower)) ||
       (s.subjectCode && s.subjectCode.toLowerCase().includes(qLower)) ||
@@ -218,7 +300,7 @@ async function executeGlobalSearch(query) {
     type: 'schedule',
     typeLabel: 'Thời khóa biểu',
     icon: 'calendar',
-    color: 'indigo',
+    color: 'sky',
     viewId: 'schedule',
     id: s.id,
     title: s.subjectName,
@@ -226,7 +308,7 @@ async function executeGlobalSearch(query) {
     matchedSnippet: s.lecturer ? `Giảng viên: ${s.lecturer}` : ''
   }));
 
-  // 2. Notes
+  // 5. Notes (Ghi chú bài học)
   const matchedNotes = (notes || []).filter(n => !n.deletedAt).filter(n => {
     return (n.title && n.title.toLowerCase().includes(qLower)) ||
       (n.content && n.content.toLowerCase().includes(qLower)) ||
@@ -245,7 +327,7 @@ async function executeGlobalSearch(query) {
     matchedSnippet: (n.content || '').slice(0, 120)
   }));
 
-  // 3. Mindmaps
+  // 6. Mindmaps (Sơ đồ tư duy)
   const matchedMindmaps = (mindmaps || []).filter(m => !m.deletedAt).filter(m => {
     const titleMatch = m.title && m.title.toLowerCase().includes(qLower);
     const nodesMatch = (m.nodes || []).some(node => node.text && node.text.toLowerCase().includes(qLower));
@@ -265,7 +347,7 @@ async function executeGlobalSearch(query) {
     };
   });
 
-  // 4. Image Notes
+  // 7. Image Notes (Chú thích ảnh)
   const matchedImageNotes = (imageNotes || []).filter(img => !img.deletedAt).filter(img => {
     const titleMatch = img.title && img.title.toLowerCase().includes(qLower);
     const annoMatch = (img.annotations || []).some(a =>
@@ -282,7 +364,7 @@ async function executeGlobalSearch(query) {
       type: 'imageNotes',
       typeLabel: 'Chú thích ảnh',
       icon: 'image',
-      color: 'rose',
+      color: 'pink',
       viewId: 'imageNotes',
       id: img.id,
       title: img.title,
@@ -291,11 +373,35 @@ async function executeGlobalSearch(query) {
     };
   });
 
+  // 8. Attachments (Tài liệu đính kèm)
+  const matchedAttachments = (attachments || []).filter(a => !a.deletedAt).filter(a => {
+    return (a.fileName && a.fileName.toLowerCase().includes(qLower)) ||
+      (a.fileType && a.fileType.toLowerCase().includes(qLower));
+  }).map(a => {
+    const sub = subjectMap.get(a.entityId);
+    return {
+      type: 'attachment',
+      typeLabel: 'File đính kèm',
+      icon: 'paperclip',
+      color: 'purple',
+      viewId: 'subjects',
+      id: a.id,
+      entityId: a.entityId,
+      title: a.fileName,
+      subtitle: `Loại: ${a.fileType || 'Tập tin'} • Thuộc: ${sub?.name || 'Môn học'}`,
+      matchedSnippet: a.fileSize ? `Kích thước: ${(a.fileSize / 1024).toFixed(1)} KB` : ''
+    };
+  });
+
   currentResults = [
+    ...matchedSubjects,
+    ...matchedTasks,
+    ...matchedExams,
     ...matchedSchedules,
     ...matchedNotes,
     ...matchedMindmaps,
-    ...matchedImageNotes
+    ...matchedImageNotes,
+    ...matchedAttachments
   ];
 
   selectedResultIndex = 0;
@@ -320,10 +426,14 @@ async function executeGlobalSearch(query) {
 
   // Render grouped results
   const groups = [
+    { type: 'subject', title: '📚 Môn học', items: matchedSubjects },
+    { type: 'task', title: '✅ Nhiệm vụ & Deadline', items: matchedTasks },
+    { type: 'exam', title: '🎖️ Kỳ thi', items: matchedExams },
     { type: 'schedule', title: '📅 Thời khóa biểu', items: matchedSchedules },
     { type: 'notes', title: '📝 Ghi chú bài học', items: matchedNotes },
     { type: 'mindmap', title: '🧠 Sơ đồ tư duy', items: matchedMindmaps },
-    { type: 'imageNotes', title: '🖼️ Chú thích ảnh Slide', items: matchedImageNotes }
+    { type: 'imageNotes', title: '🖼️ Chú thích ảnh Slide', items: matchedImageNotes },
+    { type: 'attachment', title: '📎 Tài liệu đính kèm', items: matchedAttachments }
   ].filter(g => g.items.length > 0);
 
   let html = '';
@@ -392,9 +502,14 @@ async function executeGlobalSearch(query) {
   });
 }
 
-function selectResultItem(item) {
+async function selectResultItem(item) {
   closeSearchPalette();
   if (window.studyHubApp && window.studyHubApp.switchView) {
-    window.studyHubApp.switchView(item.viewId);
+    await window.studyHubApp.switchView(item.viewId);
+    if (item.type === 'subject') {
+      openSubjectDetailModal(item.id);
+    } else if (item.type === 'attachment' && item.entityId) {
+      openSubjectDetailModal(item.entityId);
+    }
   }
 }

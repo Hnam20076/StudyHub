@@ -11,6 +11,8 @@ import {
   seedInitialNotesIfEmpty,
   seedInitialMindmapsIfEmpty,
   seedInitialImageNotesIfEmpty,
+  seedInitialSubjectsIfEmpty,
+  seedInitialAcademicDataIfEmpty,
   getSetting,
   setSetting,
   exportAllData,
@@ -31,6 +33,12 @@ import { initDashboardModule, renderDashboard } from './modules/dashboard.js';
 import { initNotesModule, openNoteFormModal } from './modules/notes.js';
 import { initMindMapModule, openCreateMindMapModal } from './modules/mindmap.js';
 import { initImageNotesModule, openUploadImageModal } from './modules/imageNotes.js';
+import { initSubjectsModule, openSubjectFormModal } from './modules/subjects.js';
+import { initTasksModule, openTaskFormModal } from './modules/tasks.js';
+import { initExamsModule, openExamFormModal } from './modules/exams.js';
+import { initGradesModule } from './modules/grades.js';
+import { initTimerModule } from './modules/timer.js';
+import { initProgressModule } from './modules/progress.js';
 
 let activeView = 'schedule'; // Start directly with Thời khóa biểu as requested
 
@@ -46,8 +54,17 @@ async function initApp() {
     // 1. Initialize IndexedDB
     await openDB();
 
+    // Migrate last_backup_timestamp from localStorage if exists
+    const legacyBackup = localStorage.getItem('last_backup_timestamp');
+    if (legacyBackup) {
+      await setSetting('last_backup_timestamp', legacyBackup);
+      localStorage.removeItem('last_backup_timestamp');
+    }
+
     // 2. Seed initial sample data across all modules if brand new
     await seedInitialScheduleIfEmpty();
+    await seedInitialSubjectsIfEmpty();
+    await seedInitialAcademicDataIfEmpty();
     await seedInitialNotesIfEmpty();
     await seedInitialMindmapsIfEmpty();
     await seedInitialImageNotesIfEmpty();
@@ -92,6 +109,12 @@ async function initApp() {
           openCreateMindMapModal();
         } else if (activeView === 'imageNotes') {
           openUploadImageModal();
+        } else if (activeView === 'subjects') {
+          openSubjectFormModal();
+        } else if (activeView === 'tasks') {
+          openTaskFormModal();
+        } else if (activeView === 'exams') {
+          openExamFormModal();
         } else {
           openScheduleFormModal();
         }
@@ -112,7 +135,19 @@ async function initApp() {
  * Switch view handler
  */
 export async function switchView(viewId) {
-  const validViews = ['dashboard', 'schedule', 'notes', 'mindmap', 'imageNotes'];
+  const validViews = [
+    'dashboard',
+    'subjects',
+    'schedule',
+    'tasks',
+    'notes',
+    'mindmap',
+    'imageNotes',
+    'exams',
+    'grades',
+    'progress',
+    'timer'
+  ];
   if (!validViews.includes(viewId)) {
     viewId = 'schedule';
   }
@@ -135,10 +170,16 @@ export async function switchView(viewId) {
   // Toggle DOM visibility
   const panels = {
     dashboard: document.getElementById('dashboard-view'),
+    subjects: document.getElementById('subjects-view'),
     schedule: document.getElementById('schedule-view'),
+    tasks: document.getElementById('tasks-view'),
     notes: document.getElementById('notes-view'),
     mindmap: document.getElementById('mindmap-view'),
-    imageNotes: document.getElementById('image-notes-view')
+    imageNotes: document.getElementById('image-notes-view'),
+    exams: document.getElementById('exams-view'),
+    grades: document.getElementById('grades-view'),
+    timer: document.getElementById('timer-view'),
+    progress: document.getElementById('progress-view')
   };
 
   Object.entries(panels).forEach(([key, el]) => {
@@ -154,14 +195,26 @@ export async function switchView(viewId) {
   // Render view-specific content
   if (activeView === 'dashboard') {
     await initDashboardModule(switchView);
+  } else if (activeView === 'subjects') {
+    await initSubjectsModule(switchView);
   } else if (activeView === 'schedule') {
     await initScheduleModule();
+  } else if (activeView === 'tasks') {
+    await initTasksModule(switchView);
   } else if (activeView === 'notes') {
     await initNotesModule();
   } else if (activeView === 'mindmap') {
     await initMindMapModule();
   } else if (activeView === 'imageNotes') {
     await initImageNotesModule();
+  } else if (activeView === 'exams') {
+    await initExamsModule(switchView);
+  } else if (activeView === 'grades') {
+    await initGradesModule(switchView);
+  } else if (activeView === 'timer') {
+    await initTimerModule(switchView);
+  } else if (activeView === 'progress') {
+    await initProgressModule(switchView);
   }
 
   // Update trash badges whenever views switch
@@ -277,8 +330,8 @@ function setupTrashFeatures() {
 /**
  * 7-Day Backup Reminder
  */
-function checkBackupReminder() {
-  const lastBackupStr = localStorage.getItem('last_backup_timestamp');
+async function checkBackupReminder() {
+  const lastBackupStr = await getSetting('last_backup_timestamp');
   const now = Date.now();
   const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -319,8 +372,8 @@ function setupBackupRestore() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        // Record last backup timestamp
-        localStorage.setItem('last_backup_timestamp', Date.now().toString());
+        // Record last backup timestamp in IndexedDB settings
+        await setSetting('last_backup_timestamp', Date.now().toString());
 
         showToast('Đã xuất file sao lưu dữ liệu thành công!', 'success');
       } catch (err) {

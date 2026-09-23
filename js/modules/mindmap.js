@@ -792,8 +792,10 @@ function exportMindMapToPNG() {
 /**
  * Open Modal to Create or Rename a Mind Map
  */
-export function openCreateMindMapModal(editingItem = null) {
+export async function openCreateMindMapModal(editingItem = null) {
   const isEditing = Boolean(editingItem);
+  const allSubjects = await getAll('subjects');
+  const subjectOptions = allSubjects.map(s => `<option value="${escapeHtml(s.name)}">`).join('');
 
   const modalHtml = `
     <div class="p-6">
@@ -835,11 +837,13 @@ export function openCreateMindMapModal(editingItem = null) {
             class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm outline-none focus:border-amber-500 transition"
           />
           <datalist id="mm-subjects-datalist">
-            <option value="Kỹ thuật số">
-            <option value="Kỹ năng công dân toàn cầu">
-            <option value="Hệ thống và điều khiển">
-            <option value="Cơ học vật liệu">
-            <option value="Tư tưởng Hồ Chí Minh">
+            ${subjectOptions || `
+              <option value="Kỹ thuật số">
+              <option value="Kỹ năng công dân toàn cầu">
+              <option value="Hệ thống và điều khiển">
+              <option value="Cơ học vật liệu">
+              <option value="Tư tưởng Hồ Chí Minh">
+            `}
           </datalist>
         </div>
 

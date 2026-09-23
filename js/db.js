@@ -6,7 +6,7 @@
 import { USER_16_WEEKS_SCHEDULE } from './data/userSchedule.js';
 
 const DB_NAME = 'StudyHubDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbInstance = null;
 
@@ -20,37 +20,118 @@ export function openDB() {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
+      const tx = event.target.transaction;
 
       // 1. Schedules store
+      let scheduleStore;
       if (!db.objectStoreNames.contains('schedules')) {
-        const scheduleStore = db.createObjectStore('schedules', { keyPath: 'id' });
+        scheduleStore = db.createObjectStore('schedules', { keyPath: 'id' });
         scheduleStore.createIndex('dayOfWeek', 'dayOfWeek', { unique: false });
         scheduleStore.createIndex('startTime', 'startTime', { unique: false });
+      } else {
+        scheduleStore = tx.objectStore('schedules');
+      }
+      if (scheduleStore && !scheduleStore.indexNames.contains('subjectId')) {
+        scheduleStore.createIndex('subjectId', 'subjectId', { unique: false });
       }
 
       // 2. Notes store
+      let notesStore;
       if (!db.objectStoreNames.contains('notes')) {
-        const notesStore = db.createObjectStore('notes', { keyPath: 'id' });
+        notesStore = db.createObjectStore('notes', { keyPath: 'id' });
         notesStore.createIndex('subjectId', 'subjectId', { unique: false });
         notesStore.createIndex('topic', 'topic', { unique: false });
         notesStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      } else {
+        notesStore = tx.objectStore('notes');
+      }
+      if (notesStore && !notesStore.indexNames.contains('deletedAt')) {
+        notesStore.createIndex('deletedAt', 'deletedAt', { unique: false });
       }
 
       // 3. Mindmaps store
+      let mindmapStore;
       if (!db.objectStoreNames.contains('mindmaps')) {
-        const mindmapStore = db.createObjectStore('mindmaps', { keyPath: 'id' });
+        mindmapStore = db.createObjectStore('mindmaps', { keyPath: 'id' });
         mindmapStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      } else {
+        mindmapStore = tx.objectStore('mindmaps');
+      }
+      if (mindmapStore && !mindmapStore.indexNames.contains('subjectId')) {
+        mindmapStore.createIndex('subjectId', 'subjectId', { unique: false });
+      }
+      if (mindmapStore && !mindmapStore.indexNames.contains('deletedAt')) {
+        mindmapStore.createIndex('deletedAt', 'deletedAt', { unique: false });
       }
 
       // 4. Image Notes store
+      let imageStore;
       if (!db.objectStoreNames.contains('imageNotes')) {
-        const imageStore = db.createObjectStore('imageNotes', { keyPath: 'id' });
+        imageStore = db.createObjectStore('imageNotes', { keyPath: 'id' });
         imageStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      } else {
+        imageStore = tx.objectStore('imageNotes');
+      }
+      if (imageStore && !imageStore.indexNames.contains('subjectId')) {
+        imageStore.createIndex('subjectId', 'subjectId', { unique: false });
+      }
+      if (imageStore && !imageStore.indexNames.contains('deletedAt')) {
+        imageStore.createIndex('deletedAt', 'deletedAt', { unique: false });
       }
 
       // 5. Settings store
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
+      }
+
+      // 6. Subjects store (v2)
+      if (!db.objectStoreNames.contains('subjects')) {
+        const subStore = db.createObjectStore('subjects', { keyPath: 'id' });
+        subStore.createIndex('code', 'code', { unique: false });
+        subStore.createIndex('createdAt', 'createdAt', { unique: false });
+        subStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+      }
+
+      // 7. Tasks store (v2)
+      if (!db.objectStoreNames.contains('tasks')) {
+        const taskStore = db.createObjectStore('tasks', { keyPath: 'id' });
+        taskStore.createIndex('subjectId', 'subjectId', { unique: false });
+        taskStore.createIndex('dueDate', 'dueDate', { unique: false });
+        taskStore.createIndex('status', 'status', { unique: false });
+        taskStore.createIndex('priority', 'priority', { unique: false });
+        taskStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+      }
+
+      // 8. Exams store (v2)
+      if (!db.objectStoreNames.contains('exams')) {
+        const examStore = db.createObjectStore('exams', { keyPath: 'id' });
+        examStore.createIndex('subjectId', 'subjectId', { unique: false });
+        examStore.createIndex('date', 'date', { unique: false });
+        examStore.createIndex('type', 'type', { unique: false });
+        examStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+      }
+
+      // 9. Grades store (v2)
+      if (!db.objectStoreNames.contains('grades')) {
+        const gradeStore = db.createObjectStore('grades', { keyPath: 'id' });
+        gradeStore.createIndex('subjectId', 'subjectId', { unique: false });
+        gradeStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+      }
+
+      // 10. Study Sessions store (v2)
+      if (!db.objectStoreNames.contains('studySessions')) {
+        const sessionStore = db.createObjectStore('studySessions', { keyPath: 'id' });
+        sessionStore.createIndex('subjectId', 'subjectId', { unique: false });
+        sessionStore.createIndex('startedAt', 'startedAt', { unique: false });
+        sessionStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+      }
+
+      // 11. Attachments store (v2)
+      if (!db.objectStoreNames.contains('attachments')) {
+        const attStore = db.createObjectStore('attachments', { keyPath: 'id' });
+        attStore.createIndex('entityType', 'entityType', { unique: false });
+        attStore.createIndex('entityId', 'entityId', { unique: false });
+        attStore.createIndex('createdAt', 'createdAt', { unique: false });
       }
     };
 
@@ -136,37 +217,53 @@ export async function restoreItem(storeName, id) {
 }
 
 /**
- * Get all soft-deleted items across Notes, Mindmaps, and ImageNotes.
+ * Get all soft-deleted items across Notes, Mindmaps, ImageNotes, Subjects, Tasks, Exams, Grades, StudySessions.
  * Automatically purges items deleted more than 30 days ago.
  */
 export async function getTrashItems() {
-  const stores = ['notes', 'mindmaps', 'imageNotes'];
+  const stores = ['notes', 'mindmaps', 'imageNotes', 'subjects', 'tasks', 'exams', 'grades', 'studySessions'];
   const trashItems = [];
   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
   const now = Date.now();
 
-  for (const store of stores) {
-    const items = await getAll(store);
-    for (const item of items) {
-      if (item.deletedAt) {
-        const deletedTime = new Date(item.deletedAt).getTime();
-        const ageMs = now - deletedTime;
+  const typeMeta = {
+    notes: { name: 'Ghi chú', icon: 'file-text', color: 'emerald' },
+    mindmaps: { name: 'Sơ đồ tư duy', icon: 'git-merge', color: 'amber' },
+    imageNotes: { name: 'Chú thích ảnh', icon: 'image', color: 'rose' },
+    subjects: { name: 'Môn học', icon: 'book-open', color: 'indigo' },
+    tasks: { name: 'Nhiệm vụ', icon: 'check-square', color: 'blue' },
+    exams: { name: 'Kỳ thi', icon: 'calendar-check', color: 'purple' },
+    grades: { name: 'Điểm số', icon: 'bar-chart-3', color: 'teal' },
+    studySessions: { name: 'Phiên tập trung', icon: 'timer', color: 'orange' }
+  };
 
-        if (ageMs > THIRTY_DAYS_MS) {
-          // Permanently purge items older than 30 days
-          await deleteItem(store, item.id);
-        } else {
-          const daysRemaining = Math.max(0, 30 - Math.floor(ageMs / (24 * 60 * 60 * 1000)));
-          trashItems.push({
-            ...item,
-            _storeName: store,
-            _typeName: store === 'notes' ? 'Ghi chú' : store === 'mindmaps' ? 'Sơ đồ tư duy' : 'Chú thích ảnh',
-            _typeIcon: store === 'notes' ? 'file-text' : store === 'mindmaps' ? 'git-merge' : 'image',
-            _typeColor: store === 'notes' ? 'emerald' : store === 'mindmaps' ? 'amber' : 'rose',
-            _daysRemaining: daysRemaining
-          });
+  for (const store of stores) {
+    try {
+      const items = await getAll(store);
+      for (const item of items) {
+        if (item.deletedAt) {
+          const deletedTime = new Date(item.deletedAt).getTime();
+          const ageMs = now - deletedTime;
+
+          if (ageMs > THIRTY_DAYS_MS) {
+            // Permanently purge items older than 30 days
+            await deleteItem(store, item.id);
+          } else {
+            const daysRemaining = Math.max(0, 30 - Math.floor(ageMs / (24 * 60 * 60 * 1000)));
+            const meta = typeMeta[store] || { name: 'Mục', icon: 'file', color: 'slate' };
+            trashItems.push({
+              ...item,
+              _storeName: store,
+              _typeName: meta.name,
+              _typeIcon: meta.icon,
+              _typeColor: meta.color,
+              _daysRemaining: daysRemaining
+            });
+          }
         }
       }
+    } catch {
+      // Store may not exist yet or empty
     }
   }
 
@@ -480,45 +577,349 @@ export async function seedInitialImageNotesIfEmpty() {
 }
 
 /**
- * Export complete database for backup
+ * Export complete database for backup (Schema v2)
  */
 export async function exportAllData() {
-  const schedules = await getAll('schedules');
-  const notes = await getAll('notes');
-  const mindmaps = await getAll('mindmaps');
-  const imageNotes = await getAll('imageNotes');
-  const settings = await getAll('settings');
+  const stores = [
+    'schedules',
+    'notes',
+    'mindmaps',
+    'imageNotes',
+    'subjects',
+    'tasks',
+    'exams',
+    'grades',
+    'studySessions',
+    'attachments',
+    'settings'
+  ];
+
+  const exportData = {};
+  for (const s of stores) {
+    try {
+      exportData[s] = await getAll(s);
+    } catch {
+      exportData[s] = [];
+    }
+  }
 
   return {
-    version: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     appName: 'StudyHub',
-    data: {
-      schedules,
-      notes,
-      mindmaps,
-      imageNotes,
-      settings
-    }
+    appVersion: '2.0.0',
+    data: exportData
   };
 }
 
 /**
- * Import and restore database from backup JSON
+ * Import and restore database from backup JSON (Compatible with v1 and v2)
  */
 export async function importData(backupObj) {
   if (!backupObj || !backupObj.data) {
     throw new Error('Dữ liệu sao lưu không đúng định dạng!');
   }
 
-  const stores = ['schedules', 'notes', 'mindmaps', 'imageNotes', 'settings'];
+  const stores = [
+    'schedules',
+    'notes',
+    'mindmaps',
+    'imageNotes',
+    'subjects',
+    'tasks',
+    'exams',
+    'grades',
+    'studySessions',
+    'attachments',
+    'settings'
+  ];
+
   for (const store of stores) {
-    await clearStore(store);
-    const items = backupObj.data[store] || [];
-    for (const item of items) {
-      await saveItem(store, item);
+    if (Array.isArray(backupObj.data[store])) {
+      await clearStore(store);
+      const items = backupObj.data[store] || [];
+      for (const item of items) {
+        await saveItem(store, item);
+      }
     }
   }
 
   return true;
+}
+
+/**
+ * Attachment Helpers
+ */
+export async function getAttachmentsByEntity(entityType, entityId) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    try {
+      const transaction = db.transaction(['attachments'], 'readonly');
+      const store = transaction.objectStore('attachments');
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const all = request.result || [];
+        const filtered = all.filter(a => a.entityType === entityType && String(a.entityId) === String(entityId));
+        resolve(filtered);
+      };
+      request.onerror = () => reject(request.error);
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+export async function deleteAttachmentsByEntity(entityType, entityId) {
+  const attachments = await getAttachmentsByEntity(entityType, entityId);
+  for (const att of attachments) {
+    await deleteItem('attachments', att.id);
+  }
+}
+
+/**
+ * Seed initial university subjects if freshly empty
+ */
+export async function seedInitialSubjectsIfEmpty() {
+  const existing = await getAll('subjects');
+  if (existing && existing.length > 0) return existing;
+
+  const INITIAL_SUBJECTS = [
+    {
+      id: 'sub_71ELEC30083',
+      code: '71ELEC30083',
+      name: 'Kỹ thuật số',
+      credits: 3,
+      lecturer: 'Lê Nguyễn Hòa Bình',
+      color: 'sky',
+      description: 'Học phần cơ sở ngành về mạch số, logic tổ hợp, tuần tự và thiết kế hệ thống số.',
+      goals: 'A',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'sub_71SSK110023',
+      code: '71SSK110023',
+      name: 'Kỹ năng công dân toàn cầu',
+      credits: 2,
+      lecturer: 'Nguyễn Thị Hoa',
+      color: 'purple',
+      description: 'Phát triển kỹ năng giao tiếp, tư duy phản biện, làm việc nhóm và năng lực thích ứng quốc tế.',
+      goals: 'A',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'sub_71ELEC30163',
+      code: '71ELEC30163',
+      name: 'Hệ thống và điều khiển',
+      credits: 3,
+      lecturer: 'Dương Văn Khải',
+      color: 'emerald',
+      description: 'Lý thuyết điều khiển tự động, mô hình hàm truyền, phân tích ổn định và thiết kế bộ điều khiển PID.',
+      goals: 'A',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'sub_71MECA30023',
+      code: '71MECA30023',
+      name: 'Cơ học vật liệu',
+      credits: 3,
+      lecturer: 'Huỳnh Văn Kiểm',
+      color: 'amber',
+      description: 'Trạng thái ứng suất, biến dạng, độ bền của thanh, dầm và kết cấu chịu lực.',
+      goals: 'B+',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: 'sub_71POLH10042',
+      code: '71POLH10042',
+      name: 'Tư tưởng Hồ Chí Minh',
+      credits: 2,
+      lecturer: 'Đoàn Thị Hà',
+      color: 'rose',
+      description: 'Nguồn gốc, quá trình hình thành, nội dung cơ bản của tư tưởng Hồ Chí Minh và sự vận dụng vào thực tiễn Việt Nam.',
+      goals: 'A',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ];
+
+  for (const sub of INITIAL_SUBJECTS) {
+    await saveItem('subjects', sub);
+  }
+  return INITIAL_SUBJECTS;
+}
+
+/**
+ * Seed initial sample tasks, exams, grades, sessions if empty
+ */
+export async function seedInitialAcademicDataIfEmpty() {
+  // 1. Seed initial Tasks
+  const tasks = await getAll('tasks');
+  if (!tasks || tasks.length === 0) {
+    const sampleTasks = [
+      {
+        id: 'task_1',
+        subjectId: 'sub_71ELEC30083',
+        title: 'Thiết kế mạch đếm BCD Modulo-60 trên Proteus',
+        description: 'Vẽ sơ đồ nguyên lý và mô phỏng mạch đếm sử dụng IC 74LS90 hoặc 74LS190. Báo cáo kết quả và chụp dạng sóng.',
+        dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
+        priority: 'high',
+        status: 'in_progress',
+        progress: 60,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'task_2',
+        subjectId: 'sub_71ELEC30163',
+        title: 'Khảo sát ổn định hệ thống điều khiển bằng biểu đồ Bode',
+        description: 'Tính toán dự trữ biên và pha của hàm truyền hở G(s). Viết mã MATLAB đối chiếu lý thuyết.',
+        dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
+        priority: 'medium',
+        status: 'pending',
+        progress: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'task_3',
+        subjectId: 'sub_71MECA30023',
+        title: 'Giải bài tập lớn tính sức bền trục truyền động',
+        description: 'Vẽ biểu đồ nội lực Qy, Mz và chọn đường kính trục theo thuyết bền ứng suất tiếp lớn nhất.',
+        dueDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
+        priority: 'urgent',
+        status: 'overdue',
+        progress: 30,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'task_4',
+        subjectId: 'sub_71SSK110023',
+        title: 'Chuẩn bị slide thuyết trình về Phát triển Bền vững (SDG 4)',
+        description: 'Tập trung vào mục tiêu bình đẳng giáo dục và tiếp cận công nghệ trong kỷ nguyên AI.',
+        dueDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
+        priority: 'low',
+        status: 'completed',
+        progress: 100,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ];
+    for (const t of sampleTasks) await saveItem('tasks', t);
+  }
+
+  // 2. Seed initial Exams
+  const exams = await getAll('exams');
+  if (!exams || exams.length === 0) {
+    const sampleExams = [
+      {
+        id: 'exam_1',
+        subjectId: 'sub_71ELEC30163',
+        title: 'Kiểm tra giữa kỳ Hệ thống & Điều khiển',
+        date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        startTime: '09:30',
+        endTime: '11:00',
+        location: 'CS3.F.09.02',
+        type: 'midterm',
+        weight: 20,
+        description: 'Thi trắc nghiệm + tự luận 60 phút. Phạm vi: Chương 1 đến Chương 3 (Hàm truyền, Biểu đồ khối, Khảo sát ổn định Routh-Hurwitz).',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'exam_2',
+        subjectId: 'sub_71ELEC30083',
+        title: 'Thi cuối kỳ Kỹ thuật số',
+        date: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        startTime: '07:30',
+        endTime: '09:30',
+        location: 'CS3.F.06.11',
+        type: 'final',
+        weight: 50,
+        description: 'Thi tự luận 90 phút. Toàn bộ nội dung lý thuyết mạch số và bài tập thiết kế FSM.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ];
+    for (const ex of sampleExams) await saveItem('exams', ex);
+  }
+
+  // 3. Seed initial Grades
+  const grades = await getAll('grades');
+  if (!grades || grades.length === 0) {
+    const sampleGrades = [
+      {
+        id: 'grade_sub_71ELEC30083',
+        subjectId: 'sub_71ELEC30083',
+        components: [
+          { name: 'Chuyên cần', weight: 10, score: 9.5 },
+          { name: 'Bài tập trên lớp', weight: 20, score: 8.5 },
+          { name: 'Thi giữa kỳ', weight: 20, score: 8.0 },
+          { name: 'Thi cuối kỳ', weight: 50, score: 8.5 }
+        ],
+        finalScore10: 8.5,
+        finalScore4: 3.5,
+        letterGrade: 'B+',
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'grade_sub_71SSK110023',
+        subjectId: 'sub_71SSK110023',
+        components: [
+          { name: 'Chuyên cần', weight: 20, score: 10.0 },
+          { name: 'Bài tập nhóm', weight: 30, score: 9.0 },
+          { name: 'Báo cáo cuối kỳ', weight: 50, score: 9.0 }
+        ],
+        finalScore10: 9.2,
+        finalScore4: 4.0,
+        letterGrade: 'A',
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'grade_sub_71ELEC30163',
+        subjectId: 'sub_71ELEC30163',
+        components: [
+          { name: 'Chuyên cần', weight: 10, score: 9.0 },
+          { name: 'Thực hành mô phỏng', weight: 20, score: 8.0 },
+          { name: 'Giữa kỳ', weight: 20, score: null },
+          { name: 'Cuối kỳ', weight: 50, score: null }
+        ],
+        finalScore10: null,
+        finalScore4: null,
+        letterGrade: null,
+        updatedAt: new Date().toISOString()
+      }
+    ];
+    for (const g of sampleGrades) await saveItem('grades', g);
+  }
+
+  // 4. Seed initial Study Sessions
+  const sessions = await getAll('studySessions');
+  if (!sessions || sessions.length === 0) {
+    const sampleSessions = [
+      {
+        id: 'sess_1',
+        subjectId: 'sub_71ELEC30083',
+        duration: 50,
+        type: 'pomodoro_50',
+        startedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+        endedAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'sess_2',
+        subjectId: 'sub_71ELEC30163',
+        duration: 25,
+        type: 'pomodoro_25',
+        startedAt: new Date(Date.now() - 1 * 3600 * 1000).toISOString(),
+        endedAt: new Date(Date.now() - 0.5 * 3600 * 1000).toISOString(),
+        createdAt: new Date().toISOString()
+      }
+    ];
+    for (const s of sampleSessions) await saveItem('studySessions', s);
+  }
 }
