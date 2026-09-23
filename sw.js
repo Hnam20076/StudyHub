@@ -20,6 +20,7 @@ const STATIC_ASSETS = [
   './js/components/search.js',
   './js/components/trashModal.js',
   './js/components/attachments.js',
+  './backup_default.json',
   './js/modules/dashboard.js',
   './js/modules/subjects.js',
   './js/modules/schedule.js',

@@ -117,12 +117,16 @@ export async function renderDashboard(onNavigate) {
 
   // 3. Nearest Exam calculation
   const upcomingExams = exams
-    .filter(e => e.examDate && e.examDate >= todayStr)
-    .sort((a, b) => {
-      const timeA = new Date(`${a.examDate}T${a.examTime || '00:00'}`).getTime();
-      const timeB = new Date(`${b.examDate}T${b.examTime || '00:00'}`).getTime();
-      return timeA - timeB;
-    });
+    .map(e => {
+      const eDate = e.examDate || e.date;
+      const eTime = e.examTime || e.startTime || '00:00';
+      const eRoom = e.room || e.location || '';
+      const fullDateStr = `${eDate}T${eTime}`;
+      const examTimeMs = new Date(fullDateStr).getTime();
+      return { ...e, eDate, eTime, eRoom, examTimeMs };
+    })
+    .filter(e => e.eDate && (e.eDate >= todayStr || e.examTimeMs >= now.getTime()))
+    .sort((a, b) => a.examTimeMs - b.examTimeMs);
   const nearestExam = upcomingExams[0] || null;
 
   // 4. Focus Time calculations (Today & This Week)
@@ -136,11 +140,13 @@ export async function renderDashboard(onNavigate) {
   const mondayStr = mondayDate.toISOString().split('T')[0];
 
   studySessions.forEach(s => {
-    if (s.date === todayStr) {
-      todayFocusMinutes += (Number(s.durationMinutes) || 0);
+    const sDate = s.date || (s.startedAt ? s.startedAt.split('T')[0] : '');
+    const sDur = Number(s.durationMinutes || s.duration) || 0;
+    if (sDate === todayStr) {
+      todayFocusMinutes += sDur;
     }
-    if (s.date >= mondayStr && s.date <= todayStr) {
-      weekFocusMinutes += (Number(s.durationMinutes) || 0);
+    if (sDate >= mondayStr && sDate <= todayStr) {
+      weekFocusMinutes += sDur;
     }
   });
 
@@ -177,10 +183,16 @@ export async function renderDashboard(onNavigate) {
   const in7DaysStr = in7Days.toISOString().split('T')[0];
 
   const pendingTasks = tasks.filter(t => t.status !== 'completed');
-  const todayTasks = tasks.filter(t => t.dueDate === todayStr);
-  const tomorrowTasks = tasks.filter(t => t.dueDate === tomorrowStr);
-  const weekTasks = tasks.filter(t => t.dueDate > tomorrowStr && t.dueDate <= in7DaysStr);
-  const overdueTasks = tasks.filter(t => t.dueDate && t.dueDate < todayStr && t.status !== 'completed');
+  const todayTasks = tasks.filter(t => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
+  const tomorrowTasks = tasks.filter(t => t.dueDate && t.dueDate.slice(0, 10) === tomorrowStr);
+  const weekTasks = tasks.filter(t => {
+    const dStr = t.dueDate ? t.dueDate.slice(0, 10) : '';
+    return dStr > tomorrowStr && dStr <= in7DaysStr;
+  });
+  const overdueTasks = tasks.filter(t => {
+    const dStr = t.dueDate ? t.dueDate.slice(0, 10) : '';
+    return dStr && dStr < todayStr && t.status !== 'completed';
+  });
 
   let activeTabTasks = [];
   if (activeDeadlineTab === 'today') activeTabTasks = todayTasks;
@@ -560,10 +572,22 @@ export async function renderDashboard(onNavigate) {
           <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
             Định kỳ tải file JSON sao lưu giúp bảo toàn toàn bộ 11 phân hệ học tập của bạn.
           </p>
-          <button id="btn-dash-export-backup" type="button" class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-100 transition cursor-pointer">
-            <i data-lucide="download" class="w-4 h-4"></i>
-            <span>Tải file sao lưu ngay</span>
-          </button>
+          <div class="space-y-2">
+            <div class="grid grid-cols-2 gap-2">
+              <button id="btn-dash-export-backup" type="button" class="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-100 transition cursor-pointer" title="Xuất file JSON sao lưu">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Tải file</span>
+              </button>
+              <button id="btn-dash-import-backup" type="button" class="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-100 transition cursor-pointer" title="Chọn file JSON từ máy tính">
+                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                <span>Chọn file</span>
+              </button>
+            </div>
+            <button id="btn-dash-sync-default" type="button" class="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-bold text-indigo-600 dark:text-indigo-400 transition cursor-pointer" title="Nạp dữ liệu mẫu mới nhất từ máy chủ">
+              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+              <span>Nạp dữ liệu mới nhất</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -722,7 +746,10 @@ function renderNearestExamWidget(nearestExam, subjects, now) {
   }
 
   const subject = subjects.find(s => s.id === nearestExam.subjectId);
-  const examDateObj = new Date(`${nearestExam.examDate}T${nearestExam.examTime || '00:00'}`);
+  const examDateStr = nearestExam.eDate || nearestExam.examDate || nearestExam.date || '';
+  const examTimeStr = nearestExam.eTime || nearestExam.examTime || nearestExam.startTime || '';
+  const examRoomStr = nearestExam.eRoom || nearestExam.room || nearestExam.location || '';
+  const examDateObj = new Date(`${examDateStr}T${examTimeStr || '00:00'}`);
   const diffMs = examDateObj.getTime() - now.getTime();
   const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
   const isUrgent = diffDays <= 7;
@@ -740,11 +767,11 @@ function renderNearestExamWidget(nearestExam, subjects, now) {
             <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isUrgent ? 'bg-rose-500 text-white animate-pulse' : 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300'}">
               ${isUrgent ? '⚠️ Sắp thi' : 'Kỳ thi kế tiếp'} • ${escapeHtml(nearestExam.type || 'Cuối kỳ')}
             </span>
-            ${nearestExam.room ? `<span class="text-[11px] text-slate-500 dark:text-slate-400">Phòng ${escapeHtml(nearestExam.room)}</span>` : ''}
+            ${examRoomStr ? `<span class="text-[11px] text-slate-500 dark:text-slate-400">Phòng ${escapeHtml(examRoomStr)}</span>` : ''}
           </div>
-          <h3 class="text-base font-bold text-slate-900 dark:text-white mt-1 truncate">${escapeHtml(subject ? subject.name : 'Kỳ thi môn học')}</h3>
+          <h3 class="text-base font-bold text-slate-900 dark:text-white mt-1 truncate">${escapeHtml(subject ? subject.name : (nearestExam.title || 'Kỳ thi môn học'))}</h3>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Ngày thi: <strong class="text-slate-700 dark:text-slate-200">${nearestExam.examDate} ${nearestExam.examTime ? `(${nearestExam.examTime})` : ''}</strong>
+            Ngày thi: <strong class="text-slate-700 dark:text-slate-200">${examDateStr} ${examTimeStr ? `(${examTimeStr})` : ''}</strong>
           </p>
         </div>
       </div>
@@ -886,6 +913,18 @@ function setupDashboardEvents(container, onNavigate, tasks, subjects) {
   // Export backup
   container.querySelector('#btn-dash-export-backup')?.addEventListener('click', () => {
     document.getElementById('btn-backup-data')?.click();
+  });
+
+  // Import backup file
+  container.querySelector('#btn-dash-import-backup')?.addEventListener('click', () => {
+    document.getElementById('input-restore-data')?.click();
+  });
+
+  // Sync latest default backup from cloud
+  container.querySelector('#btn-dash-sync-default')?.addEventListener('click', async () => {
+    if (window.studyHubApp && window.studyHubApp.syncLatestPublicData) {
+      await window.studyHubApp.syncLatestPublicData();
+    }
   });
 
   // Subject mini card click -> open subject detail modal

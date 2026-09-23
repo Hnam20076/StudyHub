@@ -48,6 +48,7 @@ async function initApp() {
     window.studyHubApp = {
       switchView,
       updateTrashBadgeCounts,
+      syncLatestPublicData,
       getActiveView: () => activeView
     };
 
@@ -418,6 +419,32 @@ function setupBackupRestore() {
       };
       reader.readAsText(file);
     });
+  }
+}
+
+/**
+ * Sync latest public data from backup_default.json
+ */
+export async function syncLatestPublicData() {
+  const proceed = await confirmDialog({
+    title: 'Nạp dữ liệu mẫu mới nhất từ máy chủ',
+    message: 'Thao tác này sẽ tải bộ dữ liệu học tập mới nhất (môn học, TKB, deadline, điểm số) từ máy chủ và ghi đè vào trình duyệt của bạn. Bạn có chắc chắn muốn tiếp tục?',
+    confirmText: 'Nạp dữ liệu ngay',
+    confirmColor: 'bg-indigo-600 hover:bg-indigo-700 text-white'
+  });
+  if (!proceed) return;
+
+  try {
+    showToast('Đang tải dữ liệu từ máy chủ...', 'info', 2000);
+    const res = await fetch('./backup_default.json?t=' + Date.now());
+    if (!res.ok) throw new Error('Không thể tải file dữ liệu từ máy chủ');
+    const data = await res.json();
+    await importData(data);
+    showToast('Đã nạp toàn bộ dữ liệu mới nhất thành công!', 'success');
+    await switchView(activeView);
+  } catch (err) {
+    console.error('Lỗi nạp dữ liệu:', err);
+    showToast('Không thể nạp dữ liệu: ' + err.message, 'error');
   }
 }
 
