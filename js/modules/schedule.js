@@ -39,11 +39,62 @@ export const WEEK_DATE_RANGES = {
   16: '21/12/2026 - 27/12/2026'
 };
 
+/**
+ * Calculate the current academic week number (1 - 16) based on target date and WEEK_DATE_RANGES.
+ * Boundary rules:
+ * - If today is before start of Week 1 -> returns 1
+ * - If today is after end of Week 16 -> returns 16
+ * - Otherwise returns the week number (1 - 16) containing today
+ *
+ * @param {Date} [targetDate=new Date()]
+ * @returns {number} Week number (1 to 16)
+ */
+export function getCurrentWeekNumber(targetDate = new Date()) {
+  const targetTime = targetDate.getTime();
+
+  // Helper to parse 'DD/MM/YYYY' into milliseconds timestamp
+  const parseDateParts = (str, isEndOfDay = false) => {
+    const [d, m, y] = str.trim().split('/').map(Number);
+    return isEndOfDay
+      ? new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+      : new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  };
+
+  // Boundary check: before Week 1 start -> default Week 1
+  const week1Parts = WEEK_DATE_RANGES[1].split('-');
+  const week1Start = parseDateParts(week1Parts[0], false);
+  if (targetTime < week1Start) {
+    return 1;
+  }
+
+  // Boundary check: after Week 16 end -> default Week 16
+  const week16Parts = WEEK_DATE_RANGES[16].split('-');
+  const week16End = parseDateParts(week16Parts[1], true);
+  if (targetTime > week16End) {
+    return 16;
+  }
+
+  // Search through weeks 1 to 16
+  for (let w = 1; w <= 16; w++) {
+    const rangeStr = WEEK_DATE_RANGES[w];
+    if (!rangeStr) continue;
+    const [startStr, endStr] = rangeStr.split('-');
+    const startTime = parseDateParts(startStr, false);
+    const endTime = parseDateParts(endStr, true);
+
+    if (targetTime >= startTime && targetTime <= endTime) {
+      return w;
+    }
+  }
+
+  return 1;
+}
+
 let currentScheduleData = [];
 let linkedNotes = [];
 let linkedMindmaps = [];
 let currentViewMode = 'week'; // 'week' | 'day'
-let currentWeekNumber = 1; // 1 to 16, or 'all'
+let currentWeekNumber = getCurrentWeekNumber(); // 1 to 16, or 'all'
 let currentSelectedDay = getCurrentVnDay(); // 2 to 8
 let currentSubjectFilter = 'all';
 
