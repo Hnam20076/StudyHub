@@ -315,13 +315,110 @@ export async function setSetting(key, value) {
 }
 
 /**
+ * 9 Data Stores checked for existing user records
+ */
+const DATA_STORES = [
+  'schedules',
+  'notes',
+  'mindmaps',
+  'imageNotes',
+  'subjects',
+  'tasks',
+  'exams',
+  'grades',
+  'studySessions'
+];
+
+/**
+ * Legacy dataset version keys in settings indicating existing user
+ */
+const LEGACY_VERSION_KEYS = [
+  'schedule_dataset_version',
+  'notes_dataset_version',
+  'mindmaps_dataset_version',
+  'image_notes_dataset_version'
+];
+
+/**
+ * Fast record counter using store.count() without fetching payloads
+ */
+async function getStoreCount(storeName) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    try {
+      const transaction = db.transaction([storeName], 'readonly');
+      const store = transaction.objectStore(storeName);
+      const request = store.count();
+      request.onsuccess = () => resolve(request.result || 0);
+      request.onerror = () => resolve(0);
+    } catch {
+      resolve(0);
+    }
+  });
+}
+
+/**
+ * One-time persistent check to determine if initial demo seed should run.
+ * Memoized in-memory during page lifetime to prevent race conditions across sequential seed calls.
+ */
+let initCheckPromise = null;
+let isFreshDbInitAllowed = null;
+
+async function shouldRunInitialSeed() {
+  if (isFreshDbInitAllowed !== null) {
+    return isFreshDbInitAllowed;
+  }
+
+  if (!initCheckPromise) {
+    initCheckPromise = (async () => {
+      try {
+        const isInitialized = await getSetting('db_initialized');
+        if (isInitialized === true) {
+          isFreshDbInitAllowed = false;
+          return false;
+        }
+
+        // Check if any legacy dataset version keys exist (indicating an existing user)
+        for (const key of LEGACY_VERSION_KEYS) {
+          const val = await getSetting(key);
+          if (val !== null && val !== undefined) {
+            await setSetting('db_initialized', true);
+            isFreshDbInitAllowed = false;
+            return false;
+          }
+        }
+
+        // Check if any of the 9 data stores contain records (indicating an existing user)
+        for (const store of DATA_STORES) {
+          const count = await getStoreCount(store);
+          if (count > 0) {
+            await setSetting('db_initialized', true);
+            isFreshDbInitAllowed = false;
+            return false;
+          }
+        }
+
+        // Truly pristine/fresh database: allow initial demo seeding sequence
+        isFreshDbInitAllowed = true;
+        return true;
+      } catch (err) {
+        console.error('Error during initial seed check:', err);
+        isFreshDbInitAllowed = false;
+        return false;
+      }
+    })();
+  }
+
+  return initCheckPromise;
+}
+
+/**
  * Seed initial sample schedule if database is freshly empty
  */
 export async function seedInitialScheduleIfEmpty() {
-  const currentVersion = await getSetting('schedule_dataset_version');
-  if (currentVersion === '16_weeks_pdf_verified_2627') {
-    const existing = await getAll('schedules');
-    if (existing.length > 0) return existing;
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return getAll('schedules');
   }
 
   // Clear older placeholder schedules
@@ -333,6 +430,7 @@ export async function seedInitialScheduleIfEmpty() {
   }
 
   await setSetting('schedule_dataset_version', '16_weeks_pdf_verified_2627');
+  await setSetting('db_initialized', true);
   return USER_16_WEEKS_SCHEDULE;
 }
 
@@ -340,10 +438,9 @@ export async function seedInitialScheduleIfEmpty() {
  * Seed initial sample notes if database is freshly empty
  */
 export async function seedInitialNotesIfEmpty() {
-  const version = await getSetting('notes_dataset_version');
-  if (version === 'v2_subjects_linked') {
-    const existing = await getAll('notes');
-    if (existing.length > 0) return existing;
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return getAll('notes');
   }
 
   const sampleNotes = [
@@ -425,10 +522,9 @@ Hàm truyền G(s) = Y(s) / U(s) là tỉ số giữa biến đổi Laplace củ
  * Seed initial sample mindmap if database is freshly empty
  */
 export async function seedInitialMindmapsIfEmpty() {
-  const version = await getSetting('mindmaps_dataset_version');
-  if (version === 'v2_subjects_linked') {
-    const existing = await getAll('mindmaps');
-    if (existing.length > 0) return existing;
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return getAll('mindmaps');
   }
 
   const sampleMindmap = {
@@ -471,8 +567,10 @@ export async function seedInitialMindmapsIfEmpty() {
  * Seed initial sample image note with SVG slide
  */
 export async function seedInitialImageNotesIfEmpty() {
-  const existing = await getAll('imageNotes');
-  if (existing.length > 0) return existing;
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return getAll('imageNotes');
+  }
 
   // Crisp sample slide diagram SVG
   const sampleSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 562" width="1000" height="562">
@@ -571,8 +669,11 @@ export async function seedInitialImageNotesIfEmpty() {
     ]
   };
 
+  await clearStore('imageNotes');
   await saveItem('imageNotes', sampleImageNote);
   await setSetting('image_notes_dataset_version', 'v2_subjects_linked');
+  await setSetting('db_initialized', true);
+  isFreshDbInitAllowed = false;
   return [sampleImageNote];
 }
 
@@ -644,6 +745,8 @@ export async function importData(backupObj) {
     }
   }
 
+  await setSetting('db_initialized', true);
+
   return true;
 }
 
@@ -680,8 +783,10 @@ export async function deleteAttachmentsByEntity(entityType, entityId) {
  * Seed initial university subjects if freshly empty
  */
 export async function seedInitialSubjectsIfEmpty() {
-  const existing = await getAll('subjects');
-  if (existing && existing.length > 0) return existing;
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return getAll('subjects');
+  }
 
   const INITIAL_SUBJECTS = [
     {
@@ -756,6 +861,11 @@ export async function seedInitialSubjectsIfEmpty() {
  * Seed initial sample tasks, exams, grades, sessions if empty
  */
 export async function seedInitialAcademicDataIfEmpty() {
+  const canSeed = await shouldRunInitialSeed();
+  if (!canSeed) {
+    return;
+  }
+
   // 1. Seed initial Tasks
   const tasks = await getAll('tasks');
   if (!tasks || tasks.length === 0) {
