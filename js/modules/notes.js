@@ -1,6 +1,14 @@
 /**
- * Notes (Ghi chú bài học) Module
- * Supports Create/Edit/Delete, Search, Filter by Subject/Topic/Tag, Pinned notes, and Interactive Checklists.
+ * Notes (Ghi chú bài học) Module — Microsoft OneNote Style
+ * Features:
+ * - Master-Detail 2-Column Layout (Notes Sidebar & Rich Text Editor Workspace)
+ * - Rich Text Formatting (Bold, Italic, Underline, Strikethrough, Headings, Lists, Quotes, Undo/Redo, Links)
+ * - Image Insertion (File Picker, Drag & Drop, Clipboard Paste Ctrl+V) with Base64 & Attachments store
+ * - Interactive To-do Checklists
+ * - Realtime Autosave with Debounce and Status Badge
+ * - Backwards Compatibility with Legacy Markdown Notes
+ * - Fast Search & Filter (Subject, Topic, Tags)
+ * - Responsive Desktop & Mobile with Drawer/Back Navigation
  */
 
 import { getAll, saveItem, deleteItem, getById, softDeleteItem, restoreItem } from '../db.js';
@@ -11,31 +19,45 @@ import {
   escapeHtml,
   formatDateVietnamese
 } from '../utils/helpers.js';
-import { openModal, confirmDialog } from '../components/modal.js';
+import { confirmDialog } from '../components/modal.js';
 import { showToast } from '../components/toast.js';
 
+// Module State
 let currentNotesData = [];
 let availableSubjects = [];
 let searchQuery = '';
 let selectedSubject = 'all';
 let selectedTopic = 'all';
 let selectedTag = 'all';
-let viewLayout = 'grid'; // 'grid' | 'list'
+let activeNoteId = null;
+let autosaveTimer = null;
+let lastSavedTime = null;
+let isMobileEditorActive = false; // Controls mobile view: false = list, true = editor
 
+/**
+ * Initialize Notes Module
+ */
 export async function initNotesModule() {
   await loadNotesAndSubjects();
+  // If there are notes and none is active, pick the first note
+  if (!activeNoteId && currentNotesData.length > 0) {
+    activeNoteId = currentNotesData[0].id;
+  }
   renderNotesView();
 }
 
+/**
+ * Load Notes and Subject catalog
+ */
 export async function loadNotesAndSubjects() {
   const allNotes = await getAll('notes');
   currentNotesData = allNotes.filter(n => !n.deletedAt);
+
   const [schedules, subjects] = await Promise.all([
     getAll('schedules'),
     getAll('subjects')
   ]);
 
-  // Combine unique subject names from subjects store, schedules and existing notes
   const set = new Set();
   subjects.forEach(s => { if (s.name) set.add(s.name); });
   schedules.forEach(s => { if (s.subjectName) set.add(s.subjectName); });
@@ -53,6 +75,9 @@ export async function loadNotesAndSubjects() {
   return currentNotesData;
 }
 
+/**
+ * Render the OneNote Master-Detail Layout
+ */
 export function renderNotesView() {
   const container = document.getElementById('notes-view');
   if (!container) return;
@@ -71,19 +96,10 @@ export function renderNotesView() {
 
   // Filter notes
   const filtered = currentNotesData.filter(item => {
-    // Subject filter
-    if (selectedSubject !== 'all' && item.subjectName !== selectedSubject) {
-      return false;
-    }
-    // Topic filter
-    if (selectedTopic !== 'all' && item.topic !== selectedTopic) {
-      return false;
-    }
-    // Tag filter
-    if (selectedTag !== 'all' && (!item.tags || !item.tags.includes(selectedTag))) {
-      return false;
-    }
-    // Search query (case insensitive search across title, content, topic, subject, tags)
+    if (selectedSubject !== 'all' && item.subjectName !== selectedSubject) return false;
+    if (selectedTopic !== 'all' && item.topic !== selectedTopic) return false;
+    if (selectedTag !== 'all' && (!item.tags || !item.tags.includes(selectedTag))) return false;
+
     if (searchQuery.trim() !== '') {
       const q = searchQuery.toLowerCase().trim();
       const titleMatch = (item.title || '').toLowerCase().includes(q);
@@ -99,144 +115,140 @@ export function renderNotesView() {
     return true;
   });
 
-  const pinnedNotes = filtered.filter(n => n.isPinned);
-  const otherNotes = filtered.filter(n => !n.isPinned);
+  // Verify active note exists
+  let activeNote = currentNotesData.find(n => n.id === activeNoteId);
+  if (!activeNote && filtered.length > 0) {
+    activeNote = filtered[0];
+    activeNoteId = activeNote.id;
+  }
 
   container.innerHTML = `
-    <!-- Top Notes Header Bar -->
-    <div class="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Ghi chú bài học</h2>
-          <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-            ${filtered.length} / ${currentNotesData.length} ghi chú
-          </span>
-        </div>
-        <p class="text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Hệ thống ghi chép môn học, checklist bài tập và ôn thi có cấu trúc
-        </p>
-      </div>
-
-      <div class="flex items-center gap-2.5 flex-wrap">
-        <!-- Layout Switcher (Grid / List) -->
-        <div class="bg-slate-100 dark:bg-slate-800 p-1 rounded-xl flex items-center border border-slate-200 dark:border-slate-700">
-          <button id="btn-layout-grid" class="p-1.5 rounded-lg text-xs transition ${viewLayout === 'grid' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400'}" title="Xem dạng lưới">
-            <i data-lucide="layout-grid" class="w-4 h-4"></i>
-          </button>
-          <button id="btn-layout-list" class="p-1.5 rounded-lg text-xs transition ${viewLayout === 'list' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400'}" title="Xem dạng danh sách">
-            <i data-lucide="list" class="w-4 h-4"></i>
-          </button>
-        </div>
-
-        <!-- Add Note Button -->
-        <button id="btn-create-note" class="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-medium text-xs md:text-sm rounded-xl shadow-sm transition">
-          <i data-lucide="plus" class="w-4 h-4"></i>
-          <span>Tạo ghi chú mới</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Search & Filter Controls Panel -->
-    <div class="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 mb-6 shadow-sm space-y-3">
-      <!-- Search Input Bar -->
-      <div class="relative">
-        <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
-        <input
-          type="text"
-          id="notes-search-box"
-          placeholder="Tìm kiếm theo tiêu đề, nội dung, môn học hoặc #tag..."
-          value="${escapeHtml(searchQuery)}"
-          class="w-full pl-10 pr-9 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 text-slate-900 dark:text-white text-xs md:text-sm outline-none focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 transition"
-        />
-        ${searchQuery ? `
-          <button id="btn-clear-search" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1">
-            <i data-lucide="x" class="w-3.5 h-3.5"></i>
-          </button>
-        ` : ''}
-      </div>
-
-      <!-- Filters Grid (Mobile: 1 col, Desktop: 3 cols) -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1 text-xs">
-        <!-- Subject Filter -->
-        <div class="flex items-center gap-2">
-          <span class="text-slate-400 font-medium w-16 flex-shrink-0">Môn học:</span>
-          <select id="filter-notes-subject" class="flex-1 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500">
-            <option value="all">Tất cả môn học</option>
-            ${availableSubjects.map(sub => `<option value="${escapeHtml(sub)}" ${selectedSubject === sub ? 'selected' : ''}>${escapeHtml(sub)}</option>`).join('')}
-          </select>
-        </div>
-
-        <!-- Topic Filter -->
-        <div class="flex items-center gap-2">
-          <span class="text-slate-400 font-medium w-16 flex-shrink-0">Chủ đề:</span>
-          <select id="filter-notes-topic" class="flex-1 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500">
-            <option value="all">Tất cả chủ đề</option>
-            ${topicsList.map(top => `<option value="${escapeHtml(top)}" ${selectedTopic === top ? 'selected' : ''}>${escapeHtml(top)}</option>`).join('')}
-          </select>
-        </div>
-
-        <!-- Tag Filter -->
-        ${tagsList.length > 0 ? `
+    <!-- OneNote 2-Column Container -->
+    <div class="h-[calc(100vh-6.5rem)] md:h-[calc(100vh-6rem)] flex flex-col md:flex-row bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden select-none">
+      
+      <!-- ==================== LEFT COLUMN: Notes Sidebar ==================== -->
+      <aside id="notes-sidebar-panel" class="${isMobileEditorActive ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 lg:w-96 border-r border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 flex-shrink-0 h-full overflow-hidden">
+        
+        <!-- Sidebar Top Header -->
+        <div class="p-3.5 pb-2 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
           <div class="flex items-center gap-2">
-            <span class="text-slate-400 font-medium w-16 flex-shrink-0">Thẻ tag:</span>
-            <select id="filter-notes-tag" class="flex-1 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500">
-              <option value="all">Tất cả thẻ tag</option>
-              ${tagsList.map(tag => `<option value="${escapeHtml(tag)}" ${selectedTag === tag ? 'selected' : ''}>${escapeHtml(tag)}</option>`).join('')}
-            </select>
+            <div class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
+              <i data-lucide="file-text" class="w-4 h-4"></i>
+            </div>
+            <div>
+              <h2 class="text-base font-bold text-slate-900 dark:text-white leading-tight">Ghi chú</h2>
+              <span class="text-[11px] font-medium text-slate-400">${filtered.length} trang</span>
+            </div>
           </div>
-        ` : ''}
-      </div>
 
-      ${(selectedSubject !== 'all' || selectedTopic !== 'all' || selectedTag !== 'all' || searchQuery) ? `
-        <div class="pt-1 flex justify-end">
-          <button id="btn-reset-filters" class="text-xs text-rose-600 dark:text-rose-400 hover:underline font-semibold flex items-center gap-1">
-            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
-            Xóa tất cả bộ lọc
+          <button id="btn-create-new-note" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs shadow-xs transition" title="Tạo trang ghi chú mới">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>Thêm mới</span>
           </button>
         </div>
-      ` : ''}
-    </div>
 
-    <!-- Notes Content Area -->
-    <div id="notes-content" class="space-y-8">
-      ${filtered.length === 0 ? renderEmptyNotes() : `
-        <!-- Pinned Notes Section -->
-        ${pinnedNotes.length > 0 ? `
-          <div>
-            <div class="flex items-center gap-2 mb-3.5">
-              <i data-lucide="pin" class="w-4 h-4 text-amber-500 fill-amber-500"></i>
-              <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                Đã ghim lên đầu (${pinnedNotes.length})
-              </h3>
-            </div>
-            <div class="${viewLayout === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-3'}">
-              ${pinnedNotes.map(item => renderNoteCard(item, viewLayout)).join('')}
-            </div>
-          </div>
-        ` : ''}
-
-        <!-- Other Notes Section -->
-        ${otherNotes.length > 0 ? `
-          <div>
-            ${pinnedNotes.length > 0 ? `
-              <div class="flex items-center gap-2 mb-3.5">
-                <i data-lucide="file-text" class="w-4 h-4 text-slate-400"></i>
-                <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                  Ghi chú khác (${otherNotes.length})
-                </h3>
-              </div>
+        <!-- Search Bar -->
+        <div class="p-3 pb-2 space-y-2">
+          <div class="relative">
+            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
+            <input
+              type="text"
+              id="sidebar-search-box"
+              placeholder="Tìm kiếm ghi chú..."
+              value="${escapeHtml(searchQuery)}"
+              class="w-full pl-9 pr-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs outline-none focus:border-emerald-500 transition"
+            />
+            ${searchQuery ? `
+              <button id="btn-sidebar-clear-search" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5">
+                <i data-lucide="x" class="w-3 h-3"></i>
+              </button>
             ` : ''}
-            <div class="${viewLayout === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-3'}">
-              ${otherNotes.map(item => renderNoteCard(item, viewLayout)).join('')}
-            </div>
           </div>
-        ` : ''}
-      `}
+
+          <!-- Quick Filters Row -->
+          <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[11px]">
+            <select id="sidebar-filter-subject" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg px-2 py-1 outline-none text-[11px] max-w-[130px] truncate">
+              <option value="all">Tất cả môn</option>
+              ${availableSubjects.map(s => `<option value="${escapeHtml(s)}" ${selectedSubject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+            </select>
+
+            ${topicsList.length > 0 ? `
+              <select id="sidebar-filter-topic" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg px-2 py-1 outline-none text-[11px] max-w-[110px] truncate">
+                <option value="all">Chủ đề</option>
+                ${topicsList.map(t => `<option value="${escapeHtml(t)}" ${selectedTopic === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+              </select>
+            ` : ''}
+
+            ${(selectedSubject !== 'all' || selectedTopic !== 'all' || selectedTag !== 'all' || searchQuery) ? `
+              <button id="btn-sidebar-reset-filters" class="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-slate-800 flex-shrink-0" title="Xóa bộ lọc">
+                <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        <!-- Scrollable Notes List -->
+        <div id="notes-sidebar-list" class="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 px-2 py-1 space-y-1">
+          ${filtered.length === 0 ? `
+            <div class="p-8 text-center text-slate-400 text-xs">
+              <i data-lucide="file-x" class="w-8 h-8 mx-auto mb-2 opacity-40"></i>
+              <p>Không có ghi chú phù hợp</p>
+            </div>
+          ` : filtered.map(item => {
+            const isActive = activeNote && activeNote.id === item.id;
+            const color = getColorById(item.color || 'emerald');
+            const previewText = extractSnippetFromNote(item);
+            const dateStr = formatDateVietnamese(new Date(item.updatedAt || item.createdAt || Date.now()));
+
+            return `
+              <div
+                data-note-id="${item.id}"
+                class="note-list-item cursor-pointer p-3 rounded-2xl transition-all select-none ${
+                  isActive
+                    ? 'bg-white dark:bg-slate-800 shadow-sm border border-emerald-500/30 ring-1 ring-emerald-500/20'
+                    : 'hover:bg-white/60 dark:hover:bg-slate-800/50 border border-transparent'
+                }"
+              >
+                <!-- Title & Pin icon -->
+                <div class="flex items-center justify-between gap-1 mb-1">
+                  <h4 class="text-xs font-bold text-slate-900 dark:text-white truncate flex-1 ${isActive ? 'text-emerald-700 dark:text-emerald-400' : ''}">
+                    ${escapeHtml(item.title || 'Ghi chú chưa đặt tên')}
+                  </h4>
+                  <div class="flex items-center gap-1 flex-shrink-0">
+                    ${item.isPinned ? `<i data-lucide="pin" class="w-3 h-3 text-amber-500 fill-amber-500"></i>` : ''}
+                    <button data-action="delete-note-sidebar" data-id="${item.id}" class="btn-sidebar-delete-note opacity-0 hover:opacity-100 p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-700 transition" title="Xóa vào thùng rác">
+                      <i data-lucide="trash-2" class="w-3 h-3"></i>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Preview text -->
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed mb-2">
+                  ${escapeHtml(previewText)}
+                </p>
+
+                <!-- Footer: Badge & Date -->
+                <div class="flex items-center justify-between text-[10px] text-slate-400">
+                  <span class="px-2 py-0.5 rounded font-bold ${color.badge} text-white truncate max-w-[120px]">
+                    ${escapeHtml(item.subjectName || 'Tự do')}
+                  </span>
+                  <span>${dateStr}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </aside>
+
+      <!-- ==================== RIGHT COLUMN: OneNote Editor Workspace ==================== -->
+      <main id="notes-editor-panel" class="${isMobileEditorActive ? 'flex' : 'hidden md:flex'} flex-1 flex-col h-full overflow-hidden bg-white dark:bg-slate-900">
+        ${activeNote ? renderNoteEditor(activeNote) : renderEmptyEditorPlaceholder()}
+      </main>
     </div>
   `;
 
   // Attach event handlers
-  setupNotesEvents(container);
+  setupOneNoteEvents(container);
 
   if (window.lucide) {
     window.lucide.createIcons({ root: container });
@@ -244,238 +256,294 @@ export function renderNotesView() {
 }
 
 /**
- * Render Empty State
+ * Render the Note Editor Workspace for a given note
  */
-function renderEmptyNotes() {
-  const hasFilter = searchQuery || selectedSubject !== 'all' || selectedTopic !== 'all' || selectedTag !== 'all';
+function renderNoteEditor(note) {
+  const color = getColorById(note.color || 'emerald');
+  const now = new Date(note.updatedAt || Date.now());
+  const initialTimeStr = lastSavedTime || `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  // Content resolution: prefer contentHtml, or convert markdown if legacy
+  let initialHtml = note.contentHtml;
+  if (!initialHtml && note.content) {
+    initialHtml = convertMarkdownToRichHtml(note.content, note.id);
+  }
+  if (!initialHtml) {
+    initialHtml = '<p><br></p>';
+  }
+
+  const tagsString = Array.isArray(note.tags) ? note.tags.join(', ') : (note.tags || '');
 
   return `
-    <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-12 text-center max-w-md mx-auto shadow-sm">
-      <div class="w-16 h-16 mx-auto rounded-3xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-4">
-        <i data-lucide="${hasFilter ? 'search-x' : 'edit-3'}" class="w-8 h-8"></i>
+    <!-- Editor Header Toolbar (Back button, Autosave status, Quick Actions) -->
+    <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/40 flex-shrink-0">
+      <div class="flex items-center gap-2">
+        <!-- Mobile Back Button -->
+        <button id="btn-mobile-back-to-list" class="md:hidden flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 transition">
+          <i data-lucide="chevron-left" class="w-4 h-4"></i>
+          <span>Danh sách</span>
+        </button>
+
+        <!-- Autosave Status Badge -->
+        <div id="editor-save-status" class="flex items-center gap-1.5 text-xs text-slate-400">
+          <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-500"></i>
+          <span>Đã lưu lúc ${initialTimeStr}</span>
+        </div>
       </div>
-      <h3 class="text-base font-bold text-slate-900 dark:text-white">
-        ${hasFilter ? 'Không tìm thấy ghi chú phù hợp' : 'Chưa có ghi chú nào'}
-      </h3>
-      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1.5 mb-6">
-        ${hasFilter ? 'Thử xóa bộ lọc hoặc tìm với từ khóa khác xem sao!' : 'Tạo ghi chú bài học đầu tiên để hệ thống hóa kiến thức hiệu quả hơn.'}
-      </p>
-      <button id="btn-empty-action" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-semibold shadow-sm transition">
-        ${hasFilter ? 'Xóa tất cả bộ lọc' : '+ Tạo ghi chú mới'}
+
+      <div class="flex items-center gap-1.5">
+        <!-- Pin Toggle -->
+        <button id="btn-editor-toggle-pin" class="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-slate-800 transition" title="${note.isPinned ? 'Bỏ ghim' : 'Ghim lên đầu'}">
+          <i data-lucide="pin" class="w-4 h-4 ${note.isPinned ? 'fill-amber-500 text-amber-500' : ''}"></i>
+        </button>
+
+        <!-- Delete Note -->
+        <button id="btn-editor-delete-note" class="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 transition" title="Xóa vào thùng rác">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Note Metadata Row -->
+    <div class="px-6 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800/80 space-y-3 flex-shrink-0">
+      <!-- Title Input -->
+      <input
+        type="text"
+        id="note-editor-title"
+        placeholder="Tiêu đề bài ghi chép..."
+        value="${escapeHtml(note.title || '')}"
+        class="w-full text-xl md:text-2xl font-black text-slate-900 dark:text-white bg-transparent outline-none border-b border-transparent focus:border-emerald-500/50 transition pb-1"
+      />
+
+      <!-- Meta selectors (Subject, Topic, Tags, Color) -->
+      <div class="flex items-center gap-3 flex-wrap text-xs">
+        <!-- Subject selector -->
+        <div class="flex items-center gap-1.5 bg-slate-100/80 dark:bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+          <i data-lucide="book-open" class="w-3.5 h-3.5 text-slate-400"></i>
+          <select id="note-editor-subject" class="bg-transparent text-slate-800 dark:text-slate-200 font-semibold outline-none text-xs">
+            <option value="">Chọn môn học</option>
+            ${availableSubjects.map(s => `<option value="${escapeHtml(s)}" ${note.subjectName === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+          </select>
+        </div>
+
+        <!-- Topic input -->
+        <div class="flex items-center gap-1.5 bg-slate-100/80 dark:bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+          <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400"></i>
+          <input
+            type="text"
+            id="note-editor-topic"
+            placeholder="Chủ đề / Bài học..."
+            value="${escapeHtml(note.topic || '')}"
+            class="bg-transparent text-slate-800 dark:text-slate-200 text-xs outline-none w-28 md:w-36"
+          />
+        </div>
+
+        <!-- Tags input -->
+        <div class="flex items-center gap-1.5 bg-slate-100/80 dark:bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+          <i data-lucide="hash" class="w-3.5 h-3.5 text-slate-400"></i>
+          <input
+            type="text"
+            id="note-editor-tags"
+            placeholder="Thẻ tag (#toan, #onthi)..."
+            value="${escapeHtml(tagsString)}"
+            class="bg-transparent text-slate-800 dark:text-slate-200 text-xs outline-none w-32 md:w-44"
+          />
+        </div>
+
+        <!-- Color selector -->
+        <div class="flex items-center gap-1 ml-auto">
+          ${SUBJECT_COLORS.slice(0, 5).map(c => `
+            <button
+              type="button"
+              data-color="${c.id}"
+              class="btn-note-color-picker w-4 h-4 rounded-full ${c.badge} transition transform hover:scale-125 ${note.color === c.id ? 'ring-2 ring-offset-2 ring-emerald-500' : ''}"
+              title="${c.name}"
+            ></button>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Rich Text Formatting Toolbar -->
+    <div class="px-4 py-1.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-700/80 flex items-center gap-1 flex-wrap text-xs overflow-x-auto no-scrollbar flex-shrink-0">
+      <!-- Text formatting -->
+      <button type="button" data-cmd="bold" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold" title="In đậm (Ctrl+B)">
+        <i data-lucide="bold" class="w-3.5 h-3.5"></i>
+      </button>
+      <button type="button" data-cmd="italic" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="In nghiêng (Ctrl+I)">
+        <i data-lucide="italic" class="w-3.5 h-3.5"></i>
+      </button>
+      <button type="button" data-cmd="underline" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Gạch chân (Ctrl+U)">
+        <i data-lucide="underline" class="w-3.5 h-3.5"></i>
+      </button>
+      <button type="button" data-cmd="strikeThrough" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Gạch ngang">
+        <i data-lucide="strikethrough" class="w-3.5 h-3.5"></i>
+      </button>
+
+      <span class="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-1"></span>
+
+      <!-- Headings & Block Formats -->
+      <button type="button" data-cmd="formatBlock" data-val="h1" class="rich-btn px-2 py-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 font-black text-xs" title="Tiêu đề 1">
+        H1
+      </button>
+      <button type="button" data-cmd="formatBlock" data-val="h2" class="rich-btn px-2 py-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 font-bold text-xs" title="Tiêu đề 2">
+        H2
+      </button>
+      <button type="button" data-cmd="formatBlock" data-val="h3" class="rich-btn px-2 py-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 font-semibold text-xs" title="Tiêu đề 3">
+        H3
+      </button>
+      <button type="button" data-cmd="formatBlock" data-val="p" class="rich-btn px-1.5 py-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-xs" title="Đoạn văn">
+        P
+      </button>
+      <button type="button" data-cmd="formatBlock" data-val="blockquote" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Trích dẫn">
+        <i data-lucide="quote" class="w-3.5 h-3.5"></i>
+      </button>
+
+      <span class="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-1"></span>
+
+      <!-- Lists -->
+      <button type="button" data-cmd="insertUnorderedList" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Danh sách gạch đầu dòng">
+        <i data-lucide="list" class="w-3.5 h-3.5"></i>
+      </button>
+      <button type="button" data-cmd="insertOrderedList" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Danh sách số thứ tự">
+        <i data-lucide="list-ordered" class="w-3.5 h-3.5"></i>
+      </button>
+
+      <!-- Checklist (To-do) -->
+      <button type="button" id="btn-insert-checklist" class="rich-btn flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 font-semibold transition" title="Chèn việc cần làm">
+        <i data-lucide="check-square" class="w-3.5 h-3.5"></i>
+        <span>To-do</span>
+      </button>
+
+      <span class="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-1"></span>
+
+      <!-- Link & Image Insert -->
+      <button type="button" id="btn-insert-link" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Chèn liên kết">
+        <i data-lucide="link" class="w-3.5 h-3.5"></i>
+      </button>
+
+      <!-- Insert Image Button -->
+      <button type="button" id="btn-trigger-upload-image" class="rich-btn flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 font-semibold transition" title="Chèn hình ảnh bài giảng">
+        <i data-lucide="image" class="w-3.5 h-3.5"></i>
+        <span>Chèn ảnh</span>
+      </button>
+      <input type="file" id="note-hidden-image-input" accept="image/png,image/jpeg,image/jpg,image/webp" class="hidden" />
+
+      <span class="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-1"></span>
+
+      <!-- Undo / Redo -->
+      <button type="button" data-cmd="undo" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Hoàn tác (Ctrl+Z)">
+        <i data-lucide="undo" class="w-3.5 h-3.5"></i>
+      </button>
+      <button type="button" data-cmd="redo" class="rich-btn p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200" title="Làm lại (Ctrl+Y)">
+        <i data-lucide="redo" class="w-3.5 h-3.5"></i>
+      </button>
+    </div>
+
+    <!-- Rich Text Editable Canvas Area -->
+    <div class="flex-1 overflow-y-auto p-6 md:p-8 relative">
+      <div
+        id="note-editor-body"
+        contenteditable="true"
+        data-placeholder="Bắt đầu ghi chép nội dung bài học tại đây (có thể kéo thả hoặc dán Ctrl+V ảnh trực tiếp)..."
+        class="note-editor-content min-h-[420px] outline-none text-slate-800 dark:text-slate-100 text-sm leading-relaxed"
+      >${initialHtml}</div>
+    </div>
+  `;
+}
+
+/**
+ * Placeholder when no note is selected
+ */
+function renderEmptyEditorPlaceholder() {
+  return `
+    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 select-none">
+      <div class="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 flex items-center justify-center mb-4">
+        <i data-lucide="file-edit" class="w-8 h-8"></i>
+      </div>
+      <h3 class="text-base font-bold text-slate-700 dark:text-slate-300 mb-1">Không có trang ghi chú nào được chọn</h3>
+      <p class="text-xs text-slate-400 max-w-sm mb-6">Chọn một ghi chú ở cột bên trái hoặc bấm nút bên dưới để tạo trang ghi chú bài học mới.</p>
+      <button id="btn-placeholder-create" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs shadow-sm transition">
+        + Tạo trang ghi chú mới
       </button>
     </div>
   `;
 }
 
 /**
- * Render Single Note Card
+ * Setup All OneNote Events (Sidebar clicks, Editor typing, Toolbar actions, Drag & Drop, Paste)
  */
-function renderNoteCard(item, layout = 'grid') {
-  const color = getColorById(item.color || 'indigo');
-  const formattedDate = formatDateVietnamese(new Date(item.updatedAt || item.createdAt || Date.now()));
+function setupOneNoteEvents(container) {
+  // 1. Create New Note button
+  const createNewNote = async () => {
+    const defaultSubject = availableSubjects[0] || 'Kỹ thuật số';
+    const nowIso = new Date().toISOString();
+    const newNote = {
+      id: generateId(),
+      title: 'Ghi chú mới',
+      subjectId: '',
+      subjectName: defaultSubject,
+      topic: '',
+      tags: [],
+      content: '',
+      contentHtml: '<p><br></p>',
+      isPinned: false,
+      color: 'emerald',
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
 
-  // Render content snippet & parse markdown checklist
-  const parsedContentHtml = parseMarkdownSnippet(item.content, item.id);
+    await saveItem('notes', newNote);
+    await loadNotesAndSubjects();
+    activeNoteId = newNote.id;
+    isMobileEditorActive = true;
+    renderNotesView();
 
-  if (layout === 'list') {
-    return `
-      <div class="note-card bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/80 p-4 shadow-xs hover:shadow-md transition flex flex-col md:flex-row md:items-center justify-between gap-4 group">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 flex-wrap mb-1.5">
-            ${item.isPinned ? `
-              <span class="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400">
-                <i data-lucide="pin" class="w-3.5 h-3.5 fill-amber-500 text-amber-500"></i>
-                Đã ghim
-              </span>
-            ` : ''}
-            <span class="px-2 py-0.5 text-[11px] font-bold rounded-md ${color.badge} text-white">
-              ${escapeHtml(item.subjectName || 'Chưa gắn môn')}
-            </span>
-            ${item.topic ? `
-              <span class="px-2 py-0.5 text-[11px] font-medium rounded-md bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
-                ${escapeHtml(item.topic)}
-              </span>
-            ` : ''}
-          </div>
+    // Auto focus title input
+    setTimeout(() => {
+      const titleInput = document.getElementById('note-editor-title');
+      if (titleInput) {
+        titleInput.focus();
+        titleInput.select();
+      }
+    }, 100);
+  };
 
-          <h4 class="text-base font-bold text-slate-900 dark:text-white truncate mb-1">
-            ${escapeHtml(item.title)}
-          </h4>
+  const btnCreateNew = container.querySelector('#btn-create-new-note');
+  if (btnCreateNew) btnCreateNew.addEventListener('click', createNewNote);
 
-          <div class="text-xs text-slate-600 dark:text-slate-300 line-clamp-2">
-            ${parsedContentHtml}
-          </div>
+  const btnPlaceholderCreate = container.querySelector('#btn-placeholder-create');
+  if (btnPlaceholderCreate) btnPlaceholderCreate.addEventListener('click', createNewNote);
 
-          ${item.tags && item.tags.length > 0 ? `
-            <div class="flex items-center gap-1.5 flex-wrap mt-2">
-              ${item.tags.map(t => `<span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-400 font-medium">${escapeHtml(t)}</span>`).join('')}
-            </div>
-          ` : ''}
-        </div>
+  // 2. Select Note from sidebar
+  container.querySelectorAll('.note-list-item').forEach(itemEl => {
+    itemEl.addEventListener('click', (e) => {
+      // If clicking delete button, don't select
+      if (e.target.closest('[data-action="delete-note-sidebar"]')) return;
 
-        <div class="flex items-center justify-between md:flex-col md:items-end gap-2 flex-shrink-0 border-t md:border-t-0 pt-2 md:pt-0 border-slate-100 dark:border-slate-700">
-          <span class="text-[11px] text-slate-400">${formattedDate}</span>
-          <div class="flex items-center gap-1">
-            <button data-action="toggle-pin" data-id="${item.id}" class="btn-pin-note p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-slate-700 transition" title="${item.isPinned ? 'Bỏ ghim' : 'Ghim lên đầu'}">
-              <i data-lucide="pin" class="w-4 h-4 ${item.isPinned ? 'fill-amber-500 text-amber-500' : ''}"></i>
-            </button>
-            <button data-action="edit" data-id="${item.id}" class="btn-edit-note p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-700 transition" title="Chỉnh sửa">
-              <i data-lucide="edit-3" class="w-4 h-4"></i>
-            </button>
-            <button data-action="delete" data-id="${item.id}" class="btn-delete-note p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-700 transition" title="Xóa">
-              <i data-lucide="trash-2" class="w-4 h-4"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // Grid Card Layout
-  return `
-    <div class="note-card bg-white dark:bg-slate-800 rounded-2xl border ${item.isPinned ? 'border-amber-300 dark:border-amber-500/50 shadow-sm ring-1 ring-amber-400/20' : 'border-slate-200 dark:border-slate-700/80 shadow-xs'} p-5 hover:shadow-md transition-all duration-150 flex flex-col justify-between group">
-      <div>
-        <!-- Top Row: Subject & Pin Action -->
-        <div class="flex items-center justify-between gap-2 mb-2.5">
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="px-2.5 py-0.5 text-[11px] font-bold rounded-lg ${color.badge} text-white">
-              ${escapeHtml(item.subjectName || 'Tự do')}
-            </span>
-            ${item.topic ? `
-              <span class="px-2 py-0.5 text-[11px] font-medium rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
-                ${escapeHtml(item.topic)}
-              </span>
-            ` : ''}
-          </div>
-
-          <div class="flex items-center gap-1">
-            <button data-action="toggle-pin" data-id="${item.id}" class="btn-pin-note p-1 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-slate-700 transition" title="${item.isPinned ? 'Bỏ ghim' : 'Ghim lên đầu'}">
-              <i data-lucide="pin" class="w-4 h-4 ${item.isPinned ? 'fill-amber-500 text-amber-500' : ''}"></i>
-            </button>
-            <button data-action="edit" data-id="${item.id}" class="btn-edit-note p-1 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-700 transition" title="Sửa">
-              <i data-lucide="edit-3" class="w-4 h-4"></i>
-            </button>
-            <button data-action="delete" data-id="${item.id}" class="btn-delete-note p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-700 transition" title="Xóa">
-              <i data-lucide="trash-2" class="w-4 h-4"></i>
-            </button>
-          </div>
-        </div>
-
-        <!-- Note Title -->
-        <h4 class="text-base font-bold text-slate-900 dark:text-white leading-snug line-clamp-2 mb-2.5">
-          ${escapeHtml(item.title)}
-        </h4>
-
-        <!-- Content Preview / Checklists -->
-        <div class="text-xs text-slate-600 dark:text-slate-300 space-y-1.5 mb-4 max-h-48 overflow-y-auto pr-1">
-          ${parsedContentHtml}
-        </div>
-      </div>
-
-      <!-- Card Bottom Footer -->
-      <div class="pt-3 border-t border-slate-100 dark:border-slate-700/80 flex flex-col gap-2">
-        <!-- Tags -->
-        ${item.tags && item.tags.length > 0 ? `
-          <div class="flex items-center gap-1 flex-wrap">
-            ${item.tags.map(t => `<button data-tag="${escapeHtml(t)}" class="btn-click-tag text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 transition">${escapeHtml(t)}</button>`).join('')}
-          </div>
-        ` : ''}
-
-        <!-- Timestamp -->
-        <div class="flex items-center justify-between text-[11px] text-slate-400">
-          <span class="flex items-center gap-1">
-            <i data-lucide="clock" class="w-3 h-3"></i>
-            ${formattedDate}
-          </span>
-          <button data-action="view-full" data-id="${item.id}" class="btn-view-full text-indigo-600 dark:text-indigo-400 hover:underline font-semibold flex items-center gap-0.5 text-xs">
-            Chi tiết
-            <i data-lucide="arrow-up-right" class="w-3 h-3"></i>
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * Lightweight Markdown & Interactive Checklist Parser
- */
-function parseMarkdownSnippet(rawContent, noteId) {
-  if (!rawContent) return '<span class="text-slate-400 italic">Không có nội dung</span>';
-
-  const lines = rawContent.split('\n');
-  let html = '';
-  let inChecklist = false;
-
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-
-    // Checkbox unchecked
-    if (trimmed.startsWith('- [ ] ')) {
-      const taskText = escapeHtml(trimmed.substring(6));
-      html += `
-        <div class="flex items-start gap-2 py-0.5">
-          <input type="checkbox" data-note-id="${noteId}" data-line-index="${index}" class="note-checklist-box mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
-          <span class="text-xs text-slate-700 dark:text-slate-300 leading-tight">${taskText}</span>
-        </div>
-      `;
-      inChecklist = true;
-      return;
-    }
-
-    // Checkbox checked
-    if (trimmed.startsWith('- [x] ') || trimmed.startsWith('- [X] ')) {
-      const taskText = escapeHtml(trimmed.substring(6));
-      html += `
-        <div class="flex items-start gap-2 py-0.5 opacity-75">
-          <input type="checkbox" checked data-note-id="${noteId}" data-line-index="${index}" class="note-checklist-box mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
-          <span class="text-xs line-through text-slate-400 dark:text-slate-500 leading-tight">${taskText}</span>
-        </div>
-      `;
-      inChecklist = true;
-      return;
-    }
-
-    // Headings
-    if (trimmed.startsWith('### ')) {
-      html += `<div class="font-bold text-xs text-slate-900 dark:text-white pt-1">${escapeHtml(trimmed.substring(4))}</div>`;
-      return;
-    }
-    if (trimmed.startsWith('## ')) {
-      html += `<div class="font-bold text-sm text-slate-900 dark:text-white pt-1.5">${escapeHtml(trimmed.substring(3))}</div>`;
-      return;
-    }
-
-    // Bullet point
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      html += `<div class="flex items-start gap-1.5 pl-1 text-xs text-slate-600 dark:text-slate-300"><span class="text-indigo-500 font-bold">•</span><span>${formatInlineMarkdown(trimmed.substring(2))}</span></div>`;
-      return;
-    }
-
-    // Regular line
-    if (trimmed.length > 0) {
-      html += `<div class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">${formatInlineMarkdown(trimmed)}</div>`;
-    }
+      const noteId = itemEl.getAttribute('data-note-id');
+      if (noteId && noteId !== activeNoteId) {
+        activeNoteId = noteId;
+        isMobileEditorActive = true;
+        renderNotesView();
+      } else {
+        isMobileEditorActive = true;
+        renderNotesView();
+      }
+    });
   });
 
-  return html;
-}
+  // 3. Delete Note from sidebar
+  container.querySelectorAll('[data-action="delete-note-sidebar"]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-id');
+      await deleteNoteWithUndo(id);
+    });
+  });
 
-function formatInlineMarkdown(text) {
-  let str = escapeHtml(text);
-  // Bold **text**
-  str = str.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900 dark:text-white">$1</strong>');
-  // Inline code `code`
-  str = str.replace(/`(.*?)`/g, '<code class="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-700/80 font-mono text-[11px] text-indigo-600 dark:text-indigo-400">$1</code>');
-  return str;
-}
-
-/**
- * Setup Event Listeners
- */
-function setupNotesEvents(container) {
-  // Search box realtime
-  const searchBox = container.querySelector('#notes-search-box');
+  // 4. Sidebar Search Box
+  const searchBox = container.querySelector('#sidebar-search-box');
   if (searchBox) {
     searchBox.addEventListener('input', (e) => {
       searchQuery = e.target.value;
@@ -483,17 +551,16 @@ function setupNotesEvents(container) {
     });
   }
 
-  // Clear search button
-  const clearSearchBtn = container.querySelector('#btn-clear-search');
-  if (clearSearchBtn) {
-    clearSearchBtn.addEventListener('click', () => {
+  const btnClearSearch = container.querySelector('#btn-sidebar-clear-search');
+  if (btnClearSearch) {
+    btnClearSearch.addEventListener('click', () => {
       searchQuery = '';
       renderNotesView();
     });
   }
 
-  // Filter subject
-  const filterSubject = container.querySelector('#filter-notes-subject');
+  // 5. Sidebar Filters
+  const filterSubject = container.querySelector('#sidebar-filter-subject');
   if (filterSubject) {
     filterSubject.addEventListener('change', (e) => {
       selectedSubject = e.target.value;
@@ -501,8 +568,7 @@ function setupNotesEvents(container) {
     });
   }
 
-  // Filter topic
-  const filterTopic = container.querySelector('#filter-notes-topic');
+  const filterTopic = container.querySelector('#sidebar-filter-topic');
   if (filterTopic) {
     filterTopic.addEventListener('change', (e) => {
       selectedTopic = e.target.value;
@@ -510,19 +576,9 @@ function setupNotesEvents(container) {
     });
   }
 
-  // Filter tag
-  const filterTag = container.querySelector('#filter-notes-tag');
-  if (filterTag) {
-    filterTag.addEventListener('change', (e) => {
-      selectedTag = e.target.value;
-      renderNotesView();
-    });
-  }
-
-  // Reset filters
-  const resetBtn = container.querySelector('#btn-reset-filters');
-  if (resetBtn) {
-    resetBtn.addEventListener('click', () => {
+  const btnResetFilters = container.querySelector('#btn-sidebar-reset-filters');
+  if (btnResetFilters) {
+    btnResetFilters.addEventListener('click', () => {
       searchQuery = '';
       selectedSubject = 'all';
       selectedTopic = 'all';
@@ -531,450 +587,482 @@ function setupNotesEvents(container) {
     });
   }
 
-  // Empty state action
-  const emptyActionBtn = container.querySelector('#btn-empty-action');
-  if (emptyActionBtn) {
-    emptyActionBtn.addEventListener('click', () => {
-      if (searchQuery || selectedSubject !== 'all' || selectedTopic !== 'all' || selectedTag !== 'all') {
-        searchQuery = '';
-        selectedSubject = 'all';
-        selectedTopic = 'all';
-        selectedTag = 'all';
-        renderNotesView();
-      } else {
-        openNoteFormModal();
-      }
-    });
-  }
-
-  // Layout switcher
-  const btnGrid = container.querySelector('#btn-layout-grid');
-  const btnList = container.querySelector('#btn-layout-list');
-  if (btnGrid) {
-    btnGrid.addEventListener('click', () => {
-      viewLayout = 'grid';
-      renderNotesView();
-    });
-  }
-  if (btnList) {
-    btnList.addEventListener('click', () => {
-      viewLayout = 'list';
+  // 6. Mobile Back button (< Danh sách)
+  const btnMobileBack = container.querySelector('#btn-mobile-back-to-list');
+  if (btnMobileBack) {
+    btnMobileBack.addEventListener('click', () => {
+      isMobileEditorActive = false;
       renderNotesView();
     });
   }
 
-  // Create note button
-  const btnCreate = container.querySelector('#btn-create-note');
-  if (btnCreate) {
-    btnCreate.addEventListener('click', () => {
-      openNoteFormModal();
-    });
-  }
+  // ==================== EDITOR WORKSPACE EVENTS ====================
+  const activeNote = currentNotesData.find(n => n.id === activeNoteId);
+  if (!activeNote) return;
 
-  // Interactive Checklist Checkboxes
-  container.querySelectorAll('.note-checklist-box').forEach(box => {
-    box.addEventListener('change', async (e) => {
-      const noteId = box.getAttribute('data-note-id');
-      const lineIndex = parseInt(box.getAttribute('data-line-index'), 10);
-      const isChecked = box.checked;
+  const titleInput = container.querySelector('#note-editor-title');
+  const subjectSelect = container.querySelector('#note-editor-subject');
+  const topicInput = container.querySelector('#note-editor-topic');
+  const tagsInput = container.querySelector('#note-editor-tags');
+  const editorBody = container.querySelector('#note-editor-body');
 
-      const note = currentNotesData.find(n => n.id === noteId);
-      if (!note || !note.content) return;
+  // Helper to trigger autosave debounce
+  const triggerAutosave = () => {
+    setAutosaveStatus('Đang lưu...');
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(async () => {
+      await saveCurrentActiveNote();
+    }, 600);
+  };
 
-      const lines = note.content.split('\n');
-      if (lines[lineIndex] !== undefined) {
-        if (isChecked) {
-          lines[lineIndex] = lines[lineIndex].replace('- [ ] ', '- [x] ');
-        } else {
-          lines[lineIndex] = lines[lineIndex].replace(/- \[[xX]\] /, '- [ ] ');
-        }
-        note.content = lines.join('\n');
-        note.updatedAt = new Date().toISOString();
+  // Input listeners for metadata
+  if (titleInput) titleInput.addEventListener('input', triggerAutosave);
+  if (subjectSelect) subjectSelect.addEventListener('change', triggerAutosave);
+  if (topicInput) topicInput.addEventListener('input', triggerAutosave);
+  if (tagsInput) tagsInput.addEventListener('input', triggerAutosave);
 
-        await saveItem('notes', note);
-        await loadNotesAndSubjects();
-        renderNotesView();
-      }
+  // Color picker
+  container.querySelectorAll('.btn-note-color-picker').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const col = btn.getAttribute('data-color');
+      activeNote.color = col;
+      container.querySelectorAll('.btn-note-color-picker').forEach(b => b.classList.remove('ring-2', 'ring-offset-2', 'ring-emerald-500'));
+      btn.classList.add('ring-2', 'ring-offset-2', 'ring-emerald-500');
+      triggerAutosave();
     });
   });
 
-  // Click on tags in card
-  container.querySelectorAll('.btn-click-tag').forEach(tagBtn => {
-    tagBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const tag = tagBtn.getAttribute('data-tag');
-      selectedTag = tag;
+  // Pin toggle in editor
+  const btnPin = container.querySelector('#btn-editor-toggle-pin');
+  if (btnPin) {
+    btnPin.addEventListener('click', async () => {
+      activeNote.isPinned = !activeNote.isPinned;
+      await saveCurrentActiveNote();
       renderNotesView();
+      showToast(activeNote.isPinned ? 'Đã ghim ghi chú lên đầu' : 'Đã bỏ ghim ghi chú', 'info');
     });
-  });
+  }
 
-  // Pin toggle
-  container.querySelectorAll('.btn-pin-note').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = btn.getAttribute('data-id');
-      const note = currentNotesData.find(n => n.id === id);
-      if (!note) return;
-
-      note.isPinned = !note.isPinned;
-      note.updatedAt = new Date().toISOString();
-      await saveItem('notes', note);
-      await loadNotesAndSubjects();
-      renderNotesView();
-      showToast(note.isPinned ? `Đã ghim ghi chú "${note.title}" lên đầu` : `Đã bỏ ghim ghi chú "${note.title}"`, 'info');
+  // Delete note in editor
+  const btnDelete = container.querySelector('#btn-editor-delete-note');
+  if (btnDelete) {
+    btnDelete.addEventListener('click', async () => {
+      await deleteNoteWithUndo(activeNote.id);
     });
-  });
+  }
 
-  // Edit / View note
-  container.querySelectorAll('.btn-edit-note, .btn-view-full').forEach(btn => {
+  // ==================== RICH TEXT TOOLBAR COMMANDS ====================
+  container.querySelectorAll('.rich-btn[data-cmd]').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const id = btn.getAttribute('data-id');
-      const note = currentNotesData.find(n => n.id === id);
-      if (note) {
-        openNoteFormModal(note);
+      e.preventDefault();
+      const cmd = btn.getAttribute('data-cmd');
+      const val = btn.getAttribute('data-val') || null;
+
+      if (cmd === 'formatBlock' && val) {
+        document.execCommand('formatBlock', false, `<${val}>`);
+      } else {
+        document.execCommand(cmd, false, val);
+      }
+      editorBody.focus();
+      triggerAutosave();
+    });
+  });
+
+  // Link button
+  const btnLink = container.querySelector('#btn-insert-link');
+  if (btnLink) {
+    btnLink.addEventListener('click', () => {
+      const url = prompt('Nhập địa chỉ liên kết (URL):', 'https://');
+      if (url && url !== 'https://') {
+        document.execCommand('createLink', false, url);
+        editorBody.focus();
+        triggerAutosave();
       }
     });
-  });
+  }
 
-  // Delete note (Soft delete to trash with 30-day retention and undo)
-  container.querySelectorAll('.btn-delete-note').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = btn.getAttribute('data-id');
-      const note = currentNotesData.find(n => n.id === id);
-      if (!note) return;
-
-      await softDeleteItem('notes', id);
-      await loadNotesAndSubjects();
-      renderNotesView();
-
-      showToast(`Đã chuyển ghi chú "${note.title}" vào thùng rác`, 'info', 5000, {
-        label: 'Hoàn tác',
-        onClick: async () => {
-          await restoreItem('notes', id);
-          await loadNotesAndSubjects();
-          renderNotesView();
-          showToast(`Đã khôi phục ghi chú "${note.title}" thành công!`, 'success');
-        }
-      });
+  // Checklist insertion button
+  const btnChecklist = container.querySelector('#btn-insert-checklist');
+  if (btnChecklist) {
+    btnChecklist.addEventListener('click', () => {
+      const todoHtml = `
+        <div class="note-todo-item flex items-start gap-2 my-1" contenteditable="true">
+          <input type="checkbox" class="note-checkbox mt-1 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" contenteditable="false">
+          <span class="todo-text flex-1 outline-none">Nhiệm vụ mới</span>
+        </div>
+        <p><br></p>
+      `;
+      document.execCommand('insertHTML', false, todoHtml);
+      editorBody.focus();
+      triggerAutosave();
     });
-  });
+  }
+
+  // Image Upload trigger button
+  const btnTriggerImage = container.querySelector('#btn-trigger-upload-image');
+  const hiddenImageInput = container.querySelector('#note-hidden-image-input');
+  if (btnTriggerImage && hiddenImageInput) {
+    btnTriggerImage.addEventListener('click', () => {
+      hiddenImageInput.click();
+    });
+
+    hiddenImageInput.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files || []);
+      for (const file of files) {
+        await insertImageIntoEditor(file, editorBody, activeNote.id);
+      }
+      hiddenImageInput.value = '';
+      triggerAutosave();
+    });
+  }
+
+  // ==================== EDITOR INTERACTION (Typing, Checkbox, Drag & Drop, Paste) ====================
+  if (editorBody) {
+    // Typing in editor
+    editorBody.addEventListener('input', triggerAutosave);
+
+    // Interactive Checkbox click inside editor
+    editorBody.addEventListener('click', (e) => {
+      const checkbox = e.target.closest('.note-checkbox');
+      if (checkbox) {
+        const isChecked = checkbox.checked;
+        if (isChecked) {
+          checkbox.setAttribute('checked', 'checked');
+        } else {
+          checkbox.removeAttribute('checked');
+        }
+        const todoText = checkbox.closest('.note-todo-item')?.querySelector('.todo-text');
+        if (todoText) {
+          todoText.classList.toggle('line-through', isChecked);
+          todoText.classList.toggle('text-slate-400', isChecked);
+          todoText.classList.toggle('dark:text-slate-500', isChecked);
+        }
+        triggerAutosave();
+      }
+    });
+
+    // Clipboard Paste (Ctrl+V) with image detection
+    editorBody.addEventListener('paste', async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type && item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            await insertImageIntoEditor(file, editorBody, activeNote.id);
+            triggerAutosave();
+          }
+          return;
+        }
+      }
+    });
+
+    // Drag & Drop image files
+    editorBody.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      editorBody.classList.add('ring-2', 'ring-emerald-500', 'bg-emerald-50/10');
+    });
+
+    editorBody.addEventListener('dragleave', () => {
+      editorBody.classList.remove('ring-2', 'ring-emerald-500', 'bg-emerald-50/10');
+    });
+
+    editorBody.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      editorBody.classList.remove('ring-2', 'ring-emerald-500', 'bg-emerald-50/10');
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type && f.type.startsWith('image/'));
+      for (const file of files) {
+        await insertImageIntoEditor(file, editorBody, activeNote.id);
+      }
+      if (files.length > 0) {
+        triggerAutosave();
+      }
+    });
+  }
 }
 
 /**
- * Open Note Create / Edit Modal
+ * Save current active note to IndexedDB
  */
-export function openNoteFormModal(editingItem = null) {
-  const isEditing = Boolean(editingItem);
-  const defaultColor = editingItem ? (editingItem.color || 'emerald') : 'emerald';
-  const defaultSubject = editingItem ? (editingItem.subjectName || '') : (availableSubjects[0] || '');
-  const defaultTags = editingItem && Array.isArray(editingItem.tags) ? editingItem.tags.join(', ') : '';
+async function saveCurrentActiveNote() {
+  const note = currentNotesData.find(n => n.id === activeNoteId);
+  if (!note) return;
 
-  const modalHtml = `
-    <div class="p-6 overflow-y-auto max-h-[88vh] flex flex-col">
-      <!-- Modal Header -->
-      <div class="flex items-center justify-between pb-4 mb-4 border-b border-slate-100 dark:border-slate-800">
-        <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-            <i data-lucide="${isEditing ? 'edit-3' : 'file-plus'}" class="w-5 h-5"></i>
-          </div>
-          <h3 class="text-lg font-bold text-slate-900 dark:text-white">
-            ${isEditing ? 'Chỉnh sửa ghi chú bài học' : 'Tạo ghi chú bài học mới'}
-          </h3>
-        </div>
-        <button id="modal-note-close" class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
+  const titleInput = document.getElementById('note-editor-title');
+  const subjectSelect = document.getElementById('note-editor-subject');
+  const topicInput = document.getElementById('note-editor-topic');
+  const tagsInput = document.getElementById('note-editor-tags');
+  const editorBody = document.getElementById('note-editor-body');
 
-      <!-- Form -->
-      <form id="form-note" class="space-y-4">
-        <!-- Title Input -->
-        <div>
-          <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Tiêu đề ghi chú <span class="text-rose-500">*</span>
-          </label>
-          <input
-            type="text"
-            id="note-title-input"
-            required
-            placeholder="VD: Cấu trúc Cây AVL & Các thuật toán xoay"
-            value="${escapeHtml(editingItem ? editingItem.title : '')}"
-            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition"
-          />
-        </div>
+  if (titleInput) note.title = titleInput.value.trim() || 'Ghi chú chưa đặt tên';
+  if (subjectSelect) note.subjectName = subjectSelect.value;
+  if (topicInput) note.topic = topicInput.value.trim();
 
-        <!-- Subject & Topic Dropdowns -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Môn học liên kết
-            </label>
-            <div class="relative">
-              <input
-                type="text"
-                id="note-subject-input"
-                list="subjects-datalist"
-                placeholder="Chọn hoặc nhập môn học..."
-                value="${escapeHtml(defaultSubject)}"
-                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs md:text-sm outline-none focus:border-emerald-500 transition"
-              />
-              <datalist id="subjects-datalist">
-                ${availableSubjects.map(s => `<option value="${escapeHtml(s)}">`).join('')}
-              </datalist>
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Chủ đề / Phân loại
-            </label>
-            <input
-              type="text"
-              id="note-topic-input"
-              placeholder="VD: Lý thuyết, Ôn thi, Đồ án..."
-              value="${escapeHtml(editingItem ? editingItem.topic || '' : '')}"
-              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs md:text-sm outline-none focus:border-emerald-500 transition"
-            />
-          </div>
-        </div>
-
-        <!-- Tags & Color & Pin -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Thẻ tag (cách nhau bởi dấu phẩy)
-            </label>
-            <input
-              type="text"
-              id="note-tags-input"
-              placeholder="VD: #AVL, #ThiGiuaKy, #GiaiThuat"
-              value="${escapeHtml(defaultTags)}"
-              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs md:text-sm outline-none focus:border-emerald-500 transition"
-            />
-          </div>
-
-          <div class="flex items-center justify-between pb-1">
-            <!-- Pin Checkbox -->
-            <label class="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                id="note-pinned-input"
-                ${editingItem && editingItem.isPinned ? 'checked' : ''}
-                class="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-300 cursor-pointer"
-              />
-              <span class="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                <i data-lucide="pin" class="w-3.5 h-3.5 text-amber-500 fill-amber-500"></i>
-                Ghim lên đầu
-              </span>
-            </label>
-
-            <!-- Color Palette Dropdown/Pick -->
-            <div class="flex items-center gap-1.5" id="note-color-picker">
-              ${SUBJECT_COLORS.slice(0, 5).map(c => `
-                <button
-                  type="button"
-                  data-color="${c.id}"
-                  class="btn-note-color w-6 h-6 rounded-full ${c.badge} transition transform hover:scale-110 ${c.id === defaultColor ? 'ring-2 ring-offset-2 ring-indigo-500' : ''}"
-                  title="${c.name}"
-                ></button>
-              `).join('')}
-              <input type="hidden" id="note-color-value" value="${defaultColor}" />
-            </div>
-          </div>
-        </div>
-
-        <!-- Note Content Tabs & Toolbar -->
-        <div>
-          <div class="flex items-center justify-between mb-2">
-            <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">
-              Nội dung bài học & Công việc cần làm
-            </label>
-
-            <div class="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700">
-              <button type="button" id="tab-edit" class="px-2.5 py-1 text-xs font-medium rounded-md bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs">
-                Soạn thảo
-              </button>
-              <button type="button" id="tab-preview" class="px-2.5 py-1 text-xs font-medium rounded-md text-slate-500 dark:text-slate-400">
-                Xem trước
-              </button>
-            </div>
-          </div>
-
-          <!-- Quick Format Buttons Toolbar -->
-          <div id="formatting-toolbar" class="flex items-center gap-1.5 p-1.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/80 mb-2 overflow-x-auto no-scrollbar text-xs">
-            <button type="button" data-insert="## " class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 font-bold" title="Tiêu đề H2">
-              H2
-            </button>
-            <button type="button" data-insert="### " class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 font-bold" title="Tiêu đề H3">
-              H3
-            </button>
-            <button type="button" data-insert="**in đậm**" class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 font-bold" title="In đậm">
-              B
-            </button>
-            <button type="button" data-insert="- [ ] " class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 flex items-center gap-1" title="Thêm việc cần làm">
-              <i data-lucide="check-square" class="w-3.5 h-3.5 text-emerald-500"></i>
-              <span>To-do</span>
-            </button>
-            <button type="button" data-insert="- " class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600" title="Danh sách gạch đầu dòng">
-              • List
-            </button>
-            <button type="button" data-insert="\`code\`" class="toolbar-btn px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:text-emerald-600 font-mono text-[11px]" title="Đoạn mã code">
-              &lt;/&gt;
-            </button>
-          </div>
-
-          <!-- Editor Textarea -->
-          <textarea
-            id="note-content-input"
-            rows="8"
-            placeholder="Nhập nội dung bài học, công thức, định dạng markdown hoặc dùng '- [ ] việc cần làm'..."
-            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs md:text-sm leading-relaxed outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition font-mono"
-          >${escapeHtml(editingItem ? editingItem.content || '' : '')}</textarea>
-
-          <!-- Live Preview Pane (hidden by default) -->
-          <div id="note-preview-pane" class="hidden min-h-[190px] p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 text-xs md:text-sm space-y-2 overflow-y-auto max-h-[300px]"></div>
-        </div>
-
-        <!-- Form Actions -->
-        <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <button
-            type="button"
-            id="btn-cancel-note"
-            class="px-4 py-2 rounded-xl text-xs md:text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-          >
-            Hủy
-          </button>
-          <button
-            type="submit"
-            class="px-5 py-2 rounded-xl text-xs md:text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white transition shadow-sm"
-          >
-            ${isEditing ? 'Lưu cập nhật' : 'Tạo ghi chú'}
-          </button>
-        </div>
-      </form>
-    </div>
-  `;
-
-  const modal = openModal(modalHtml, { size: 'max-w-2xl' });
-  const wrapper = modal.wrapper;
-
-  // Close handlers
-  wrapper.querySelector('#modal-note-close').addEventListener('click', () => modal.close());
-  wrapper.querySelector('#btn-cancel-note').addEventListener('click', () => modal.close());
-
-  // Color picker
-  const colorInput = wrapper.querySelector('#note-color-value');
-  wrapper.querySelectorAll('.btn-note-color').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const col = btn.getAttribute('data-color');
-      colorInput.value = col;
-      wrapper.querySelectorAll('.btn-note-color').forEach(b => b.classList.remove('ring-2', 'ring-offset-2', 'ring-indigo-500'));
-      btn.classList.add('ring-2', 'ring-offset-2', 'ring-indigo-500');
-    });
-  });
-
-  // Editor vs Preview Tab Switching
-  const tabEdit = wrapper.querySelector('#tab-edit');
-  const tabPreview = wrapper.querySelector('#tab-preview');
-  const contentInput = wrapper.querySelector('#note-content-input');
-  const previewPane = wrapper.querySelector('#note-preview-pane');
-  const toolbar = wrapper.querySelector('#formatting-toolbar');
-
-  tabEdit.addEventListener('click', () => {
-    tabEdit.className = 'px-2.5 py-1 text-xs font-medium rounded-md bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs';
-    tabPreview.className = 'px-2.5 py-1 text-xs font-medium rounded-md text-slate-500 dark:text-slate-400';
-    contentInput.classList.remove('hidden');
-    toolbar.classList.remove('hidden');
-    previewPane.classList.add('hidden');
-  });
-
-  tabPreview.addEventListener('click', () => {
-    tabPreview.className = 'px-2.5 py-1 text-xs font-medium rounded-md bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs';
-    tabEdit.className = 'px-2.5 py-1 text-xs font-medium rounded-md text-slate-500 dark:text-slate-400';
-    contentInput.classList.add('hidden');
-    toolbar.classList.add('hidden');
-    previewPane.classList.remove('hidden');
-    previewPane.innerHTML = parseMarkdownSnippet(contentInput.value, 'preview');
-    if (window.lucide) {
-      window.lucide.createIcons({ root: previewPane });
-    }
-  });
-
-  // Toolbar Insert helper
-  wrapper.querySelectorAll('.toolbar-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const textToInsert = btn.getAttribute('data-insert');
-      const start = contentInput.selectionStart;
-      const end = contentInput.selectionEnd;
-      const text = contentInput.value;
-      contentInput.value = text.substring(0, start) + textToInsert + text.substring(end);
-      contentInput.focus();
-      contentInput.selectionStart = contentInput.selectionEnd = start + textToInsert.length;
-    });
-  });
-
-  // Submit Handler
-  const form = wrapper.querySelector('#form-note');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-
-    const title = wrapper.querySelector('#note-title-input').value.trim();
-    const subjectName = wrapper.querySelector('#note-subject-input').value.trim();
-    const topic = wrapper.querySelector('#note-topic-input').value.trim();
-    const rawTags = wrapper.querySelector('#note-tags-input').value.trim();
-    const content = contentInput.value.trim();
-    const isPinned = wrapper.querySelector('#note-pinned-input').checked;
-    const color = colorInput.value;
-
-    if (!title) {
-      showToast('Vui lòng nhập tiêu đề ghi chú!', 'warning');
-      return;
-    }
-
-    // Format tags array with leading '#'
-    const tags = rawTags
-      ? rawTags.split(',').map(t => {
+  if (tagsInput) {
+    const raw = tagsInput.value.trim();
+    note.tags = raw
+      ? raw.split(',').map(t => {
           let clean = t.trim();
           if (clean && !clean.startsWith('#')) clean = '#' + clean;
           return clean;
         }).filter(Boolean)
       : [];
+  }
 
-    const subjectCodeMap = {
-      'Kỹ thuật số': '71ELEC30083',
-      'Kỹ năng công dân toàn cầu': '71SSK110023',
-      'Hệ thống và điều khiển': '71ELEC30163',
-      'Cơ học vật liệu': '71MECA30023',
-      'Tư tưởng Hồ Chí Minh': '71POLH10042'
-    };
-    const subjectId = subjectCodeMap[subjectName] || (editingItem ? editingItem.subjectId : '') || '';
+  if (editorBody) {
+    note.contentHtml = editorBody.innerHTML;
+    note.content = extractSnippetFromHtml(editorBody.innerHTML);
+  }
 
-    const nowIso = new Date().toISOString();
-    const noteToSave = {
-      id: editingItem ? editingItem.id : generateId(),
-      title,
-      subjectId,
-      subjectName,
-      topic,
-      tags,
-      content,
-      isPinned,
-      color,
-      createdAt: editingItem ? (editingItem.createdAt || nowIso) : nowIso,
-      updatedAt: nowIso
-    };
+  note.updatedAt = new Date().toISOString();
 
-    await saveItem('notes', noteToSave);
-    await loadNotesAndSubjects();
-    renderNotesView();
-    modal.close();
+  await saveItem('notes', note);
 
-    showToast(isEditing ? `Đã cập nhật ghi chú "${title}"` : `Đã tạo ghi chú "${title}" thành công!`, 'success');
+  // Update last saved time
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  lastSavedTime = timeStr;
+  setAutosaveStatus(`Đã lưu lúc ${timeStr}`);
+
+  // Update item in sidebar without breaking user focus in editor
+  updateSidebarItem(note);
+}
+
+/**
+ * Update single sidebar item text/badges smoothly without full re-render
+ */
+function updateSidebarItem(note) {
+  const itemEl = document.querySelector(`.note-list-item[data-note-id="${note.id}"]`);
+  if (!itemEl) return;
+
+  const titleEl = itemEl.querySelector('h4');
+  if (titleEl) titleEl.textContent = note.title;
+
+  const previewEl = itemEl.querySelector('p');
+  if (previewEl) previewEl.textContent = extractSnippetFromNote(note);
+
+  const subjectBadge = itemEl.querySelector('span.rounded');
+  if (subjectBadge) {
+    subjectBadge.textContent = note.subjectName || 'Tự do';
+    const col = getColorById(note.color || 'emerald');
+    subjectBadge.className = `px-2 py-0.5 rounded font-bold ${col.badge} text-white truncate max-w-[120px]`;
+  }
+}
+
+/**
+ * Set Autosave Status text
+ */
+function setAutosaveStatus(text) {
+  const statusEl = document.getElementById('editor-save-status');
+  if (!statusEl) return;
+
+  if (text.includes('Đang lưu')) {
+    statusEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> <span class="text-amber-500 font-medium">Đang lưu...</span>`;
+  } else {
+    statusEl.innerHTML = `<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-500"></i> <span class="text-slate-400 dark:text-slate-500">${text}</span>`;
+    if (window.lucide) window.lucide.createIcons({ root: statusEl });
+  }
+}
+
+/**
+ * Delete note with 30-day soft delete and Undo Toast
+ */
+async function deleteNoteWithUndo(noteId) {
+  const note = currentNotesData.find(n => n.id === noteId);
+  if (!note) return;
+
+  await softDeleteItem('notes', noteId);
+  await loadNotesAndSubjects();
+
+  if (activeNoteId === noteId) {
+    activeNoteId = currentNotesData.length > 0 ? currentNotesData[0].id : null;
+  }
+
+  renderNotesView();
+
+  showToast(`Đã chuyển ghi chú "${note.title}" vào thùng rác`, 'info', 5000, {
+    label: 'Hoàn tác',
+    onClick: async () => {
+      await restoreItem('notes', noteId);
+      await loadNotesAndSubjects();
+      activeNoteId = noteId;
+      renderNotesView();
+      showToast(`Đã khôi phục ghi chú "${note.title}" thành công!`, 'success');
+    }
+  });
+}
+
+/**
+ * Read image file, save in attachments store, and insert into editor
+ */
+async function insertImageIntoEditor(file, editorBody, noteId) {
+  if (!file || !file.type.startsWith('image/')) return;
+
+  const MAX_SIZE = 15 * 1024 * 1024; // 15MB
+  if (file.size > MAX_SIZE) {
+    showToast(`Ảnh "${file.name}" vượt quá giới hạn 15MB!`, 'error');
+    return;
+  }
+
+  try {
+    const base64Data = await readFileAsDataURL(file);
+    const imageId = `att_img_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    // Save image to attachments store
+    await saveItem('attachments', {
+      id: imageId,
+      name: file.name || 'image.png',
+      size: file.size,
+      type: file.type || 'image/png',
+      entityType: 'note-image',
+      entityId: String(noteId),
+      data: base64Data,
+      createdAt: new Date().toISOString()
+    });
+
+    // Create image container in editor
+    const imgHtml = `
+      <div class="note-image-container my-3 select-none text-center" contenteditable="false">
+        <img src="${base64Data}" data-attachment-id="${imageId}" class="note-embedded-image rounded-2xl max-w-full h-auto inline-block border border-slate-200 dark:border-slate-700/80 shadow-sm" alt="${escapeHtml(file.name || 'Slide')}" />
+      </div>
+      <p><br></p>
+    `;
+
+    editorBody.focus();
+    document.execCommand('insertHTML', false, imgHtml);
+    showToast('Đã chèn ảnh bài giảng thành công!', 'success');
+  } catch (err) {
+    console.error('Image upload error:', err);
+    showToast('Lỗi khi tải ảnh lên!', 'error');
+  }
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Backward compatibility: Convert Markdown text from old notes into Rich Text HTML
+ */
+function convertMarkdownToRichHtml(rawContent, noteId) {
+  if (!rawContent) return '<p><br></p>';
+
+  const lines = rawContent.split('\n');
+  let html = '';
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+
+    // Checkbox unchecked
+    if (trimmed.startsWith('- [ ] ')) {
+      const taskText = escapeHtml(trimmed.substring(6));
+      html += `
+        <div class="note-todo-item flex items-start gap-2 my-1" contenteditable="true">
+          <input type="checkbox" class="note-checkbox mt-1 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" contenteditable="false" />
+          <span class="todo-text flex-1 outline-none">${taskText}</span>
+        </div>
+      `;
+      return;
+    }
+
+    // Checkbox checked
+    if (trimmed.startsWith('- [x] ') || trimmed.startsWith('- [X] ')) {
+      const taskText = escapeHtml(trimmed.substring(6));
+      html += `
+        <div class="note-todo-item flex items-start gap-2 my-1" contenteditable="true">
+          <input type="checkbox" checked class="note-checkbox mt-1 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" contenteditable="false" />
+          <span class="todo-text flex-1 outline-none line-through text-slate-400 dark:text-slate-500">${taskText}</span>
+        </div>
+      `;
+      return;
+    }
+
+    // Headings
+    if (trimmed.startsWith('### ')) {
+      html += `<h3 class="text-base font-bold my-1 text-slate-900 dark:text-white">${escapeHtml(trimmed.substring(4))}</h3>`;
+      return;
+    }
+    if (trimmed.startsWith('## ')) {
+      html += `<h2 class="text-lg font-bold my-1.5 text-slate-900 dark:text-white">${escapeHtml(trimmed.substring(3))}</h2>`;
+      return;
+    }
+    if (trimmed.startsWith('# ')) {
+      html += `<h1 class="text-xl font-bold my-2 text-slate-900 dark:text-white">${escapeHtml(trimmed.substring(2))}</h1>`;
+      return;
+    }
+
+    // Bullet list
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      html += `<p class="flex items-start gap-1.5 ml-2 my-0.5 text-slate-700 dark:text-slate-300"><span class="text-emerald-500 font-bold">•</span><span>${formatInlineMarkdown(trimmed.substring(2))}</span></p>`;
+      return;
+    }
+
+    // Blank line
+    if (trimmed.length === 0) {
+      html += `<p><br></p>`;
+      return;
+    }
+
+    // Regular line
+    html += `<p class="my-0.5 leading-relaxed text-slate-700 dark:text-slate-300">${formatInlineMarkdown(trimmed)}</p>`;
   });
 
-  if (window.lucide) {
-    window.lucide.createIcons({ root: wrapper });
+  return html;
+}
+
+function formatInlineMarkdown(text) {
+  let str = escapeHtml(text);
+  str = str.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  str = str.replace(/`(.*?)`/g, '<code class="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs text-indigo-600 dark:text-indigo-400">$1</code>');
+  return str;
+}
+
+/**
+ * Extract plain text summary from Note for preview in sidebar & search
+ */
+function extractSnippetFromNote(note) {
+  if (note.content) {
+    return note.content.replace(/#+\s+/g, '').replace(/-\s+\[[ xX]\]\s+/g, '').replace(/[*_`]/g, '').trim().slice(0, 120);
+  }
+  if (note.contentHtml) {
+    return extractSnippetFromHtml(note.contentHtml).slice(0, 120);
+  }
+  return 'Không có nội dung';
+}
+
+function extractSnippetFromHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return (tmp.innerText || tmp.textContent || '').trim();
+}
+
+/**
+ * Compatibility Export: openNoteFormModal(editingItem)
+ * When called from outside (e.g. mobile quick-add button in app.js or dashboard links),
+ * switches to that note and activates the editor view.
+ */
+export function openNoteFormModal(editingItem = null) {
+  if (editingItem && editingItem.id) {
+    activeNoteId = editingItem.id;
+    isMobileEditorActive = true;
+    renderNotesView();
+  } else {
+    // Create new blank note
+    const btnNew = document.getElementById('btn-create-new-note');
+    if (btnNew) {
+      btnNew.click();
+    } else {
+      initNotesModule().then(() => {
+        const b = document.getElementById('btn-create-new-note');
+        if (b) b.click();
+      });
+    }
   }
 }

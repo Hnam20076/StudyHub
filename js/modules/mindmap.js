@@ -23,6 +23,7 @@ let isPanning = false;
 let startPanPos = { x: 0, y: 0 };
 let draggedNode = null;
 let dragStartPos = { x: 0, y: 0 };
+let editingNodeId = null;
 
 export async function initMindMapModule() {
   await loadMindmaps();
@@ -291,8 +292,8 @@ function renderMindMapStudio(container) {
       <div class="absolute bottom-3 left-3 right-3 sm:right-auto bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-3 shadow-md pointer-events-none">
         <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px] font-bold">Tab</kbd> Nhánh con</span>
         <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px] font-bold">Enter</kbd> Cùng cấp</span>
+        <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px] font-bold">F2 / Nhấp đúp</kbd> Sửa chữ</span>
         <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px] font-bold">Kéo chuột</kbd> Di chuyển</span>
-        <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px] font-bold">Nhấp đúp</kbd> Sửa chữ</span>
       </div>
     </div>
   `;
@@ -308,26 +309,85 @@ function renderMindMapStudio(container) {
  * Draw all nodes and connecting bezier curves
  */
 function drawMindMapContent() {
-  const svg = document.getElementById('mindmap-svg');
   const nodesLayer = document.getElementById('mindmap-nodes-layer');
-  if (!svg || !nodesLayer || !activeMindmap) return;
+  if (!nodesLayer || !activeMindmap) return;
 
-  // Render SVG Paths
+  // Render HTML Nodes first
+  nodesLayer.innerHTML = activeMindmap.nodes.map(node => {
+    const isSelected = node.id === selectedNodeId;
+    const isRoot = node.isRoot;
+    const colorObj = getColorById(node.color || (isRoot ? 'indigo' : 'sky'));
+
+    return `
+      <div
+        id="node-${node.id}"
+        data-id="${node.id}"
+        class="mindmap-node absolute cursor-move select-none transition-shadow ${
+          isRoot
+            ? 'px-5 py-3 rounded-2xl bg-indigo-600 text-white font-extrabold text-sm md:text-base shadow-lg shadow-indigo-500/25 border-2 border-indigo-400'
+            : `px-3.5 py-2 rounded-xl ${colorObj.bgLight} ${colorObj.darkBg} font-bold text-xs md:text-sm shadow-xs hover:shadow-md border-2 ${colorObj.darkBg.split(' ')[1]}`
+        } ${isSelected ? 'ring-4 ring-offset-2 ring-amber-400 z-30' : 'z-20'}"
+        style="left: ${node.x}px; top: ${node.y}px; min-width: 120px; max-width: 280px;"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div class="node-text break-words whitespace-pre-wrap leading-snug flex-1 select-none" title="${escapeHtml(node.text)}">${escapeHtml(node.text)}</div>
+          <button data-id="${node.id}" class="btn-node-add-child p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/20 text-current transition flex-shrink-0" title="Thêm nhánh con">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  if (window.lucide) {
+    window.lucide.createIcons({ root: nodesLayer });
+  }
+
+  // Draw connecting SVG Bezier curves
+  drawMindMapConnections();
+
+  // Attach interactions
+  attachNodeInteractions(nodesLayer);
+}
+
+/**
+ * Draw connecting bezier curves between nodes
+ */
+function drawMindMapConnections() {
+  const svg = document.getElementById('mindmap-svg');
+  if (!svg || !activeMindmap) return;
+
   let pathsHtml = '';
   activeMindmap.nodes.forEach(node => {
     if (node.parentId) {
       const parent = activeMindmap.nodes.find(n => n.id === node.parentId);
       if (parent) {
-        const startX = parent.x + 90;
-        const startY = parent.y + 20;
-        const endX = node.x;
-        const endY = node.y + 20;
+        const parentEl = document.getElementById(`node-${parent.id}`);
+        const nodeEl = document.getElementById(`node-${node.id}`);
 
-        // Cubic Bezier curve
-        const dx = Math.abs(endX - startX) * 0.5;
-        const cp1x = startX + dx;
+        const parentW = parentEl ? parentEl.offsetWidth : 140;
+        const parentH = parentEl ? parentEl.offsetHeight : 40;
+        const nodeW = nodeEl ? nodeEl.offsetWidth : 140;
+        const nodeH = nodeEl ? nodeEl.offsetHeight : 40;
+
+        let startX, startY, endX, endY;
+
+        if (node.x >= parent.x) {
+          startX = parent.x + parentW;
+          startY = parent.y + Math.round(parentH / 2);
+          endX = node.x;
+          endY = node.y + Math.round(nodeH / 2);
+        } else {
+          startX = parent.x;
+          startY = parent.y + Math.round(parentH / 2);
+          endX = node.x + nodeW;
+          endY = node.y + Math.round(nodeH / 2);
+        }
+
+        const dx = Math.max(30, Math.abs(endX - startX) * 0.5);
+        const cp1x = node.x >= parent.x ? startX + dx : startX - dx;
         const cp1y = startY;
-        const cp2x = endX - dx;
+        const cp2x = node.x >= parent.x ? endX - dx : endX + dx;
         const cp2y = endY;
 
         const colorObj = getColorById(node.color || 'indigo');
@@ -345,42 +405,38 @@ function drawMindMapContent() {
     }
   });
   svg.innerHTML = pathsHtml;
+}
 
-  // Render HTML Nodes
-  nodesLayer.innerHTML = activeMindmap.nodes.map(node => {
-    const isSelected = node.id === selectedNodeId;
-    const isRoot = node.isRoot;
-    const colorObj = getColorById(node.color || (isRoot ? 'indigo' : 'sky'));
+/**
+ * Update selection visuals without re-rendering nodes
+ */
+function selectNode(nodeId) {
+  selectedNodeId = nodeId;
+  const container = document.getElementById('mindmap-view');
+  if (!container) return;
 
-    return `
-      <div
-        id="node-${node.id}"
-        data-id="${node.id}"
-        class="mindmap-node absolute cursor-move select-none transition-shadow ${
-          isRoot
-            ? 'px-5 py-3 rounded-2xl bg-indigo-600 text-white font-extrabold text-sm md:text-base shadow-lg shadow-indigo-500/25 border-2 border-indigo-400'
-            : `px-3.5 py-2 rounded-xl ${colorObj.bgLight} ${colorObj.darkBg} font-bold text-xs md:text-sm shadow-xs hover:shadow-md border-2 ${colorObj.darkBg.split(' ')[1]}`
-        } ${isSelected ? 'ring-4 ring-offset-2 ring-amber-400 z-30' : 'z-20'}"
-        style="left: ${node.x}px; top: ${node.y}px; min-width: 120px; max-width: 260px;"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <div class="node-text truncate flex-1" title="${escapeHtml(node.text)}">
-            ${escapeHtml(node.text)}
-          </div>
-          <button data-id="${node.id}" class="btn-node-add-child p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/20 text-current transition" title="Thêm nhánh con">
-            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
+  container.querySelectorAll('.mindmap-node').forEach(nodeEl => {
+    const id = nodeEl.getAttribute('data-id');
+    if (id === nodeId) {
+      nodeEl.classList.add('ring-4', 'ring-offset-2', 'ring-amber-400', 'z-30');
+      nodeEl.classList.remove('z-20');
+    } else {
+      nodeEl.classList.remove('ring-4', 'ring-offset-2', 'ring-amber-400', 'z-30');
+      nodeEl.classList.add('z-20');
+    }
+  });
 
-  if (window.lucide) {
-    window.lucide.createIcons({ root: nodesLayer });
+  const selectedNode = activeMindmap?.nodes?.find(n => n.id === nodeId);
+  if (selectedNode) {
+    container.querySelectorAll('.btn-change-node-color').forEach(btn => {
+      const col = btn.getAttribute('data-color');
+      if (selectedNode.color === col) {
+        btn.classList.add('ring-2', 'ring-offset-1', 'ring-indigo-500');
+      } else {
+        btn.classList.remove('ring-2', 'ring-offset-1', 'ring-indigo-500');
+      }
+    });
   }
-
-  // Attach node interaction events (click, drag, double-click inline edit)
-  attachNodeInteractions(nodesLayer);
 }
 
 /**
@@ -389,47 +445,82 @@ function drawMindMapContent() {
 function attachNodeInteractions(nodesLayer) {
   nodesLayer.querySelectorAll('.mindmap-node').forEach(el => {
     const nodeId = el.getAttribute('data-id');
+    let isPointerDown = false;
+    let hasDragged = false;
+    let startMouseX = 0;
+    let startMouseY = 0;
+    let startNodeX = 0;
+    let startNodeY = 0;
+    let targetNode = null;
 
-    // Selection on click
+    // Selection & Drag on pointerdown
     el.addEventListener('pointerdown', (e) => {
-      // If clicking child add button, don't drag
-      if (e.target.closest('.btn-node-add-child')) return;
+      // If clicking child add button or inside an input/textarea, do not drag
+      if (e.target.closest('.btn-node-add-child') || e.target.closest('textarea') || e.target.closest('input')) {
+        return;
+      }
 
       e.stopPropagation();
-      selectedNodeId = nodeId;
-      draggedNode = activeMindmap.nodes.find(n => n.id === nodeId);
-      dragStartPos = {
-        mouseX: e.clientX,
-        mouseY: e.clientY,
-        nodeX: draggedNode.x,
-        nodeY: draggedNode.y
-      };
+      isPointerDown = true;
+      hasDragged = false;
+      startMouseX = e.clientX;
+      startMouseY = e.clientY;
 
-      // Set active pointer capture
+      targetNode = activeMindmap.nodes.find(n => n.id === nodeId);
+      if (!targetNode) return;
+
+      startNodeX = targetNode.x;
+      startNodeY = targetNode.y;
+
+      // Select this node if not selected
+      if (selectedNodeId !== nodeId) {
+        selectNode(nodeId);
+      }
+
       el.setPointerCapture(e.pointerId);
-      drawMindMapContent();
     });
 
     el.addEventListener('pointermove', (e) => {
-      if (draggedNode && draggedNode.id === nodeId) {
-        const dx = (e.clientX - dragStartPos.mouseX) / scale;
-        const dy = (e.clientY - dragStartPos.mouseY) / scale;
-        draggedNode.x = Math.round(dragStartPos.nodeX + dx);
-        draggedNode.y = Math.round(dragStartPos.nodeY + dy);
-        drawMindMapContent();
+      if (!isPointerDown || !targetNode) return;
+
+      const dx = (e.clientX - startMouseX) / scale;
+      const dy = (e.clientY - startMouseY) / scale;
+
+      if (!hasDragged && Math.hypot(dx, dy) >= 5) {
+        hasDragged = true;
+      }
+
+      if (hasDragged) {
+        targetNode.x = Math.round(startNodeX + dx);
+        targetNode.y = Math.round(startNodeY + dy);
+        el.style.left = `${targetNode.x}px`;
+        el.style.top = `${targetNode.y}px`;
+        drawMindMapConnections();
       }
     });
 
-    el.addEventListener('pointerup', (e) => {
-      if (draggedNode && draggedNode.id === nodeId) {
-        draggedNode = null;
-        try { el.releasePointerCapture(e.pointerId); } catch (_) {}
-        autoSaveActiveMindmap();
+    el.addEventListener('pointerup', async (e) => {
+      if (!isPointerDown) return;
+      isPointerDown = false;
+      try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+
+      if (hasDragged) {
+        hasDragged = false;
+        await autoSaveActiveMindmap();
       }
+      targetNode = null;
+    });
+
+    el.addEventListener('pointercancel', (e) => {
+      isPointerDown = false;
+      hasDragged = false;
+      targetNode = null;
+      try { el.releasePointerCapture(e.pointerId); } catch (_) {}
     });
 
     // Double click to inline edit
     el.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.btn-node-add-child') || e.target.closest('textarea') || e.target.closest('input')) return;
       e.stopPropagation();
       startInlineEditNode(el, nodeId);
     });
@@ -447,39 +538,85 @@ function attachNodeInteractions(nodesLayer) {
 }
 
 function startInlineEditNode(nodeEl, nodeId) {
+  if (editingNodeId === nodeId) return;
+
+  // Finish any previous inline edit
+  if (editingNodeId) {
+    const prevEl = document.getElementById(`node-${editingNodeId}`);
+    if (prevEl) {
+      const prevTextarea = prevEl.querySelector('textarea');
+      if (prevTextarea) prevTextarea.blur();
+    }
+  }
+
   const textDiv = nodeEl.querySelector('.node-text');
   if (!textDiv) return;
 
   const node = activeMindmap.nodes.find(n => n.id === nodeId);
   if (!node) return;
 
-  const currentText = node.text;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = currentText;
-  input.className = 'w-full bg-white dark:bg-slate-800 text-slate-900 dark:text-white px-1.5 py-0.5 rounded border border-indigo-500 text-xs font-bold outline-none';
+  editingNodeId = nodeId;
+  selectNode(nodeId);
+  const originalText = node.text;
+
+  const textarea = document.createElement('textarea');
+  textarea.value = originalText;
+  textarea.className = 'w-full bg-white dark:bg-slate-800 text-slate-900 dark:text-white px-2 py-1 rounded-lg border-2 border-amber-500 text-xs md:text-sm font-semibold outline-none resize-none leading-snug overflow-hidden shadow-inner';
+  textarea.style.minWidth = '120px';
+  textarea.style.boxSizing = 'border-box';
+  textarea.style.display = 'block';
 
   textDiv.innerHTML = '';
-  textDiv.appendChild(input);
-  input.focus();
-  input.select();
+  textDiv.appendChild(textarea);
 
-  const finishEdit = () => {
-    const newText = input.value.trim();
-    if (newText) {
+  const autoResize = () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(26, textarea.scrollHeight)}px`;
+    drawMindMapConnections();
+  };
+
+  autoResize();
+  textarea.focus();
+  textarea.select();
+
+  let isFinished = false;
+  const finishEdit = async (saveChanges = true) => {
+    if (isFinished) return;
+    isFinished = true;
+    editingNodeId = null;
+
+    const newText = textarea.value.trim();
+    if (saveChanges && newText) {
       node.text = newText;
-      autoSaveActiveMindmap();
+      await autoSaveActiveMindmap();
+    } else {
+      node.text = originalText;
     }
+
     drawMindMapContent();
   };
 
-  input.addEventListener('blur', finishEdit);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      finishEdit();
+  textarea.addEventListener('pointerdown', (e) => e.stopPropagation());
+  textarea.addEventListener('mousedown', (e) => e.stopPropagation());
+  textarea.addEventListener('click', (e) => e.stopPropagation());
+  textarea.addEventListener('dblclick', (e) => e.stopPropagation());
+  textarea.addEventListener('input', autoResize);
+
+  textarea.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      finishEdit(true);
     } else if (e.key === 'Escape') {
-      drawMindMapContent();
+      e.preventDefault();
+      finishEdit(false);
+    } else if (e.key === 'Enter' && e.shiftKey) {
+      setTimeout(autoResize, 0);
     }
+  });
+
+  textarea.addEventListener('blur', () => {
+    finishEdit(true);
   });
 }
 
@@ -579,7 +716,16 @@ function setupMindMapStudioEvents(container) {
       return;
     }
 
-    if (e.key === 'Tab') {
+    if (e.key === 'F2') {
+      e.preventDefault();
+      const targetId = selectedNodeId || (activeMindmap.nodes[0] && activeMindmap.nodes[0].id);
+      if (targetId) {
+        const nodeEl = document.getElementById(`node-${targetId}`);
+        if (nodeEl) {
+          startInlineEditNode(nodeEl, targetId);
+        }
+      }
+    } else if (e.key === 'Tab') {
       e.preventDefault();
       addChildNode();
     } else if (e.key === 'Enter') {
@@ -761,9 +907,10 @@ function exportMindMapToPNG() {
     const y = node.y + offsetY;
     const color = getColorById(node.color || (node.isRoot ? 'indigo' : 'sky'));
 
-    // Rounded rectangle
-    const nw = Math.max(120, Math.min(240, node.text.length * 10 + 30));
-    const nh = 38;
+    const lines = (node.text || '').split('\n');
+    const maxLineLength = Math.max(...lines.map(l => l.length), 10);
+    const nw = Math.max(120, Math.min(280, maxLineLength * 9 + 36));
+    const nh = Math.max(38, lines.length * 20 + 16);
 
     ctx.fillStyle = node.isRoot ? '#4f46e5' : '#1e293b';
     ctx.strokeStyle = color.hex;
@@ -776,9 +923,12 @@ function exportMindMapToPNG() {
 
     // Text
     ctx.fillStyle = '#ffffff';
-    ctx.font = node.isRoot ? 'bold 14px "Be Vietnam Pro", sans-serif' : '500 12px "Be Vietnam Pro", sans-serif';
+    ctx.font = node.isRoot ? 'bold 13px "Be Vietnam Pro", sans-serif' : '500 12px "Be Vietnam Pro", sans-serif';
     ctx.textBaseline = 'middle';
-    ctx.fillText(node.text, x + 14, y + nh / 2, nw - 28);
+    lines.forEach((line, idx) => {
+      const lineY = y + (nh / 2) - ((lines.length - 1) * 10) + (idx * 20);
+      ctx.fillText(line, x + 14, lineY, nw - 28);
+    });
   });
 
   // Trigger download
